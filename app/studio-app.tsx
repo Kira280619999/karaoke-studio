@@ -16,6 +16,7 @@ import {
 } from 'react';
 
 import { API_BASE, ApiError, api, assetUrl } from './lib/api';
+import { JobMonitor } from './lib/job-monitor';
 import {
   KARAOKE_FONTS,
   karaokeFontFamily,
@@ -40,6 +41,7 @@ import {
   nearestMarkerWithin,
   lyricFitScale,
   setPreviousLineEnd,
+  trimTokenEdge,
   setTransitionGap,
   setTransitionStart,
   timeUsToPixels,
@@ -101,7 +103,7 @@ export default function StudioApp() {
   const [job, setJob] = useState<Job | null>(null);
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const jobSourceRef = useRef<EventSource | null>(null);
+  const jobMonitorRef = useRef<JobMonitor | null>(null);
   const editorMode = !showCreate && Boolean(
     workspace && !['IMPORTED', 'FAILED'].includes(workspace.project.state),
   );
@@ -157,37 +159,46 @@ export default function StudioApp() {
 
   const watchJob = useCallback(
     (initial: Job) => {
-      jobSourceRef.current?.close();
+      jobMonitorRef.current?.stop();
       setJob(initial);
-      const source = new EventSource(`${API_BASE}/api/jobs/${initial.id}/events`);
-      jobSourceRef.current = source;
-      source.onmessage = (event) => {
-        const payload = JSON.parse(event.data) as Partial<Job>;
-        setJob((current) => (current ? { ...current, ...payload } : current));
-      };
-      source.addEventListener('terminal', (event) => {
-        const terminal = JSON.parse((event as MessageEvent<string>).data) as Job;
-        setJob(terminal);
-        source.close();
-        if (jobSourceRef.current === source) jobSourceRef.current = null;
-        void refreshProjects();
-        void loadWorkspace(initial.project_id);
+      const monitor = new JobMonitor({
+        initial,
+        eventUrl: `${API_BASE}/api/jobs/${initial.id}/events`,
+        fetchJob: () => api<Job>(`/api/jobs/${initial.id}`),
+        onUpdate: setJob,
+        onTerminal: async (terminal) => {
+          if (jobMonitorRef.current === monitor) jobMonitorRef.current = null;
+          const results = await Promise.allSettled([
+            refreshProjects(),
+            loadWorkspace(terminal.project_id),
+          ]);
+          const failure = results.find((result) => result.status === 'rejected');
+          if (failure?.status === 'rejected') {
+            setError(
+              failure.reason instanceof Error
+                ? failure.reason.message
+                : 'Job đã xong nhưng chưa tải lại được workspace.',
+            );
+          }
+        },
       });
-      source.onerror = () => {
-        source.close();
-        if (jobSourceRef.current === source) jobSourceRef.current = null;
-        void api<Job>(`/api/jobs/${initial.id}`)
-          .then((current) => {
-            setJob(current);
-            if (current.state === 'COMPLETE') void loadWorkspace(current.project_id);
-          })
-          .catch(() => undefined);
-      };
+      jobMonitorRef.current = monitor;
+      monitor.start();
     },
     [loadWorkspace, refreshProjects],
   );
 
+  useEffect(() => () => {
+    jobMonitorRef.current?.stop();
+    jobMonitorRef.current = null;
+  }, []);
+
   const selectProject = (projectId: string) => {
+    if (projectId !== selectedId) {
+      jobMonitorRef.current?.stop();
+      jobMonitorRef.current = null;
+      setJob(null);
+    }
     setDeleteCandidateId(null);
     setSelectedId(projectId);
     setShowCreate(false);
@@ -202,8 +213,8 @@ export default function StudioApp() {
     setError(null);
     try {
       if (project.id === selectedId) {
-        jobSourceRef.current?.close();
-        jobSourceRef.current = null;
+        jobMonitorRef.current?.stop();
+        jobMonitorRef.current = null;
       }
       await api<{ deleted: boolean; project_id: string }>(`/api/projects/${project.id}`, {
         method: 'DELETE',
@@ -1293,7 +1304,7 @@ const SONG_ROLL_ZOOM = [36, 72, 140] as const;
 const SONG_ROLL_TICKS = [0.5, 1, 2, 5, 10, 15, 30, 60] as const;
 
 interface SongRollDrag {
-  scope: 'token' | 'line';
+  scope: 'token' | 'line' | 'trim-start' | 'trim-end';
   lineId: string;
   tokenId: string;
   lane: number;
@@ -1515,6 +1526,10 @@ function SongTimelineRoll({
 
   const paintDragGhost = (drag: SongRollDrag) => {
     panelRef.current?.classList.add('dragging');
+    panelRef.current?.classList.toggle(
+      'trimming',
+      drag.scope === 'trim-start' || drag.scope === 'trim-end',
+    );
     const ghost = dragGhostRef.current;
     if (ghost) {
       ghost.hidden = false;
@@ -1527,7 +1542,12 @@ function SongTimelineRoll({
       )}px`;
     }
     if (dragGhostDeltaRef.current) {
-      dragGhostDeltaRef.current.textContent = `${drag.deltaUs >= 0 ? '+' : ''}${Math.round(drag.deltaUs / 1_000)} ms`;
+      const action = drag.scope === 'trim-start'
+        ? 'ĐẦU'
+        : drag.scope === 'trim-end'
+        ? 'HẾT'
+        : 'DỜI';
+      dragGhostDeltaRef.current.textContent = `${action} ${drag.deltaUs >= 0 ? '+' : ''}${Math.round(drag.deltaUs / 1_000)} ms`;
     }
     if (dragGhostSnapRef.current) {
       dragGhostSnapRef.current.hidden = drag.snappedMarkerUs === null;
@@ -1537,6 +1557,7 @@ function SongTimelineRoll({
   const clearDragVisuals = (restore?: Timeline, lineId?: string) => {
     if (restore && lineId) paintDragLine(restore, lineId);
     panelRef.current?.classList.remove('dragging');
+    panelRef.current?.classList.remove('trimming');
     if (dragGhostRef.current) dragGhostRef.current.hidden = true;
     if (dragGhostSnapRef.current) dragGhostSnapRef.current.hidden = true;
     dragElementsRef.current?.tokens.forEach((element) => {
@@ -1548,14 +1569,23 @@ function SongTimelineRoll({
   };
 
   const beginItemDrag = (
-    event: ReactPointerEvent<HTMLButtonElement>,
+    event: ReactPointerEvent<HTMLElement>,
     line: LineTiming,
     tokenId: string,
-    scope: 'token' | 'line',
+    scope: SongRollDrag['scope'],
     lane: number,
   ) => {
+    if (!event.isPrimary || event.button !== 0) return;
     const token = line.tokens.find((candidate) => candidate.id === tokenId);
-    if (!token || line.locked || (scope === 'token' && token.locked)) return;
+    if (!token || line.locked || (scope !== 'line' && token.locked)) return;
+    const tokenIndex = line.tokens.findIndex((candidate) => candidate.id === tokenId);
+    const previousToken = tokenIndex > 0 ? line.tokens[tokenIndex - 1] : null;
+    const nextToken = tokenIndex + 1 < line.tokens.length ? line.tokens[tokenIndex + 1] : null;
+    if (
+      (scope === 'trim-start' && previousToken?.locked)
+      || (scope === 'trim-end' && nextToken?.locked)
+      || (scope === 'token' && (previousToken?.locked || nextToken?.locked))
+    ) return;
     onSilence();
     if (dragFrameRef.current !== null) {
       window.cancelAnimationFrame(dragFrameRef.current);
@@ -1608,25 +1638,40 @@ function SongTimelineRoll({
     let requestedDeltaUs = Math.round(
       ((movedPixels / pixelsPerSecond) * 1_000_000) / snapUs,
     ) * snapUs;
-    const requestedStartUs = drag.originalStartUs + requestedDeltaUs;
+    const originalEdgeUs = drag.scope === 'trim-end'
+      ? drag.originalEndUs
+      : drag.originalStartUs;
+    const requestedEdgeUs = originalEdgeUs + requestedDeltaUs;
     const markerSnapThresholdUs = Math.min(
       250_000,
       Math.max(60_000, Math.round((8 / pixelsPerSecond) * 1_000_000)),
     );
     const nearestMarker = nearestMarkerWithin(
       markers,
-      requestedStartUs,
+      requestedEdgeUs,
       markerSnapThresholdUs,
     );
-    if (nearestMarker !== null) requestedDeltaUs = nearestMarker - drag.originalStartUs;
+    if (nearestMarker !== null) requestedDeltaUs = nearestMarker - originalEdgeUs;
     const next = drag.scope === 'line'
       ? moveLineBy(drag.baseTimeline, drag.lineId, requestedDeltaUs)
-      : moveTokenBy(drag.baseTimeline, drag.lineId, drag.tokenId, requestedDeltaUs);
+      : drag.scope === 'token'
+      ? moveTokenBy(drag.baseTimeline, drag.lineId, drag.tokenId, requestedDeltaUs)
+      : trimTokenEdge(
+        drag.baseTimeline,
+        drag.lineId,
+        drag.tokenId,
+        drag.scope === 'trim-start' ? 'start' : 'end',
+        originalEdgeUs + requestedDeltaUs,
+      );
     const nextLine = next.lines.find((line) => line.id === drag.lineId);
     const nextToken = nextLine?.tokens.find((token) => token.id === drag.tokenId);
-    const nextStartUs = drag.scope === 'line' ? nextLine?.start_us : nextToken?.start_us;
-    drag.deltaUs = (nextStartUs ?? drag.originalStartUs) - drag.originalStartUs;
-    drag.snappedMarkerUs = nearestMarker !== null && nextStartUs === nearestMarker
+    const nextEdgeUs = drag.scope === 'line'
+      ? nextLine?.start_us
+      : drag.scope === 'trim-end'
+      ? nextToken?.end_us
+      : nextToken?.start_us;
+    drag.deltaUs = (nextEdgeUs ?? originalEdgeUs) - originalEdgeUs;
+    drag.snappedMarkerUs = nearestMarker !== null && nextEdgeUs === nearestMarker
       ? nearestMarker
       : null;
     drag.latestTimeline = next;
@@ -1634,7 +1679,7 @@ function SongTimelineRoll({
     paintDragGhost(drag);
   };
 
-  const moveItemDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const moveItemDrag = (event: ReactPointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
     const movedPixels = event.clientX - drag.startX;
@@ -1656,7 +1701,7 @@ function SongTimelineRoll({
     event.stopPropagation();
   };
 
-  const endItemDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const endItemDrag = (event: ReactPointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.started) {
@@ -1678,7 +1723,7 @@ function SongTimelineRoll({
     dragElementsRef.current = null;
   };
 
-  const cancelItemDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const cancelItemDrag = (event: ReactPointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
     if (dragFrameRef.current !== null) {
@@ -1800,7 +1845,7 @@ function SongTimelineRoll({
       <div className="song-roll-header">
         <div>
           <span>MAGNETIC LYRIC TIMELINE</span>
-          <small>Kéo clip từ/câu · thả để tự lưu · Shift bắt theo frame · thao tác luôn tắt tiếng</small>
+          <small>Kéo thân để dời · kéo hai mép trắng để rút/ngân từ · thả là tự lưu · Shift bắt theo frame</small>
           <div className={`song-roll-autosave ${autosaveStatus}`} role="status" aria-live="polite" title={autosaveError ?? undefined}>
             <i />
             <strong>{autosaveStatus === 'error'
@@ -1927,14 +1972,20 @@ function SongTimelineRoll({
                   timeUsToPixels(token.end_us, pixelsPerSecond) - left,
                 );
                 const selected = lineActive && token.id === selectedTokenId;
+                const canTrimStart = !line.locked
+                  && !token.locked
+                  && !line.tokens[tokenIndex - 1]?.locked;
+                const canTrimEnd = !line.locked
+                  && !token.locked
+                  && !line.tokens[tokenIndex + 1]?.locked;
                 return (
                   <button
-                    className={`song-roll-token lane-${lane} ${tokenIndex === 0 ? 'first-token' : ''} ${tokenIndex === line.tokens.length - 1 ? 'last-token' : ''} ${lineActive ? 'active-line' : ''} ${selected ? 'selected' : ''} ${token.verified ? 'verified' : 'review'}`}
+                    className={`song-roll-token lane-${lane} ${width < 28 ? 'short-token' : ''} ${tokenIndex === 0 ? 'first-token' : ''} ${tokenIndex === line.tokens.length - 1 ? 'last-token' : ''} ${lineActive ? 'active-line' : ''} ${selected ? 'selected' : ''} ${token.verified ? 'verified' : 'review'}`}
                     style={{ left: `${left}px`, width: `${width}px` }}
                     type="button"
                     tabIndex={selected ? 0 : -1}
                     aria-pressed={selected}
-                    title={`${line.text} · ${token.text} · ${formatTime(token.start_us)} — ${formatTime(token.end_us)}`}
+                    title={`${line.text} · ${token.text} · ${formatTime(token.start_us)} — ${formatTime(token.end_us)} · kéo thân để dời, kéo mép để co giãn`}
                     aria-label={`Mở và nghe từ ${token.text} trong câu ${line.text}`}
                     data-song-line-id={line.id}
                     data-song-kind="token"
@@ -1949,7 +2000,31 @@ function SongTimelineRoll({
                       selectItem(line.id, token.id);
                     }}
                   >
-                    {width >= 22 ? token.text : ''}
+                    <span className="song-roll-token-text">{width >= 22 ? token.text : ''}</span>
+                    {selected && (canTrimStart || canTrimEnd) && (
+                      <>
+                        {canTrimStart && (
+                          <span
+                            className="song-roll-trim-handle start"
+                            aria-hidden="true"
+                            onPointerDown={(event) => beginItemDrag(event, line, token.id, 'trim-start', lane)}
+                            onPointerMove={moveItemDrag}
+                            onPointerUp={endItemDrag}
+                            onPointerCancel={cancelItemDrag}
+                          />
+                        )}
+                        {canTrimEnd && (
+                          <span
+                            className="song-roll-trim-handle end"
+                            aria-hidden="true"
+                            onPointerDown={(event) => beginItemDrag(event, line, token.id, 'trim-end', lane)}
+                            onPointerMove={moveItemDrag}
+                            onPointerUp={endItemDrag}
+                            onPointerCancel={cancelItemDrag}
+                          />
+                        )}
+                      </>
+                    )}
                   </button>
                 );
               }),
@@ -1963,7 +2038,7 @@ function SongTimelineRoll({
           </div>
         </div>
       </div>
-      <div className="song-roll-legend"><span><i className="current" /> Câu đang chỉnh</span><span><i className="verified" /> Đã duyệt</span><span><i className="review" /> Cần nghe</span><span><i className="origin" /> Vị trí trước khi kéo</span><b>{timeline.lines.length} câu · {timeline.lines.reduce((count, line) => count + line.tokens.length, 0)} từ</b></div>
+      <div className="song-roll-legend"><span><i className="current" /> Câu đang chỉnh</span><span><i className="verified" /> Đã duyệt</span><span><i className="review" /> Cần nghe</span><span><i className="trim" /> Mép co giãn</span><span><i className="origin" /> Vị trí trước khi kéo</span><b>{timeline.lines.length} câu · {timeline.lines.reduce((count, line) => count + line.tokens.length, 0)} từ</b></div>
       {(showDetails || expanded) && (
         <div className="song-roll-detail-drawer">
           {markers.length > 0 && (

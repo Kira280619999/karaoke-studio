@@ -694,6 +694,51 @@ export function setBoundary(
   return copy;
 }
 
+export function trimTokenEdge(
+  timeline: Timeline,
+  lineId: string,
+  tokenId: string,
+  edge: 'start' | 'end',
+  nextUs: number,
+): Timeline {
+  const lineIndex = timeline.lines.findIndex((line) => line.id === lineId);
+  const line = timeline.lines[lineIndex];
+  const tokenIndex = line?.tokens.findIndex((token) => token.id === tokenId) ?? -1;
+  const token = line?.tokens[tokenIndex];
+  if (!line || !token || line.locked || token.locked) return timeline;
+
+  const boundaryIndex = edge === 'start' ? tokenIndex : tokenIndex + 1;
+  const adjacentIndex = edge === 'start' ? tokenIndex - 1 : tokenIndex + 1;
+  if (adjacentIndex >= 0 && adjacentIndex < line.tokens.length) {
+    if (line.tokens[adjacentIndex].locked) return timeline;
+  }
+
+  const frameUs = Math.max(
+    1,
+    Math.round(1_000_000 * timeline.fps_denominator / timeline.fps_numerator),
+  );
+  let value = Math.round(nextUs);
+
+  if (boundaryIndex === 0) {
+    const maximum = token.end_us - frameUs;
+    const previousLineEnd = lineIndex > 0 ? timeline.lines[lineIndex - 1].end_us : 0;
+    const minimum = Math.min(maximum, previousLineEnd);
+    value = Math.max(minimum, Math.min(maximum, value));
+  } else if (boundaryIndex === line.tokens.length) {
+    const minimum = token.start_us + frameUs;
+    const nextLineStart = lineIndex + 1 < timeline.lines.length
+      ? timeline.lines[lineIndex + 1].start_us
+      : timeline.duration_us;
+    const maximum = Math.max(minimum, Math.min(timeline.duration_us, nextLineStart));
+    value = Math.max(minimum, Math.min(maximum, value));
+  }
+
+  const currentBoundary = edge === 'start' ? token.start_us : token.end_us;
+  if (value === currentBoundary) return timeline;
+
+  return setBoundary(timeline, lineId, boundaryIndex, value);
+}
+
 export function setTransitionStart(
   timeline: Timeline,
   lineId: string,

@@ -25,6 +25,7 @@ import {
   setTransitionStart,
   timeUsToPixels,
   tokenDisplaySegments,
+  trimTokenEdge,
   verifyTiming,
 } from './timeline.ts';
 import type { LineTiming, Timeline, TimingSuggestion } from './types.ts';
@@ -152,6 +153,73 @@ test('whole-song roll moves a word by borrowing time from adjacent words', () =>
   assert.ok(moved.lines[0].tokens.every((token) => token.start_us < token.end_us));
   assert.equal(moved.lines[0].tokens[1].source, 'manual');
   assert.equal(moved.lines[1], threeTokens.lines[1]);
+});
+
+test('trim handle shortens the final word and moves the line end with its sweep', () => {
+  const editable = structuredClone(timeline);
+  editable.lines[0].verified = true;
+  editable.lines[0].tokens[1].verified = true;
+  editable.lines[0].tokens[1].sweep = {
+    schema_version: '1.0',
+    source: 'ensemble_ctc',
+    confidence: 0.95,
+    verified: true,
+    points: [
+      { time_us: 1_800_000, line_progress_ppm: 400_000 },
+      { time_us: 2_400_000, line_progress_ppm: 760_000 },
+      { time_us: 3_000_000, line_progress_ppm: 1_000_000 },
+    ],
+  };
+
+  const changed = trimTokenEdge(editable, 'line-1', 't2', 'end', 2_300_000);
+  const finalToken = changed.lines[0].tokens[1];
+
+  assert.equal(finalToken.end_us, 2_300_000);
+  assert.equal(changed.lines[0].end_us, 2_300_000);
+  assert.equal(changed.lines[0].tokens[0].end_us, 1_800_000);
+  assert.equal(finalToken.sweep?.points.at(-1)?.time_us, 2_300_000);
+  assert.equal(finalToken.sweep?.verified, false);
+  assert.equal(finalToken.source, 'manual');
+  assert.equal(changed.lines[0].verified, false);
+  assert.equal(editable.lines[0].end_us, 3_000_000);
+});
+
+test('final trim is clamped to one frame and cannot extend across the next line', () => {
+  const editable = structuredClone(timeline);
+  editable.duration_us = 6_000_000;
+  editable.lines.push({
+    ...structuredClone(line),
+    id: 'line-2',
+    text: 'Câu sau',
+    start_us: 3_200_000,
+    end_us: 5_000_000,
+    tokens: [{
+      ...structuredClone(line.tokens[0]),
+      id: 'next',
+      text: 'Câu sau',
+      start_us: 3_200_000,
+      end_us: 5_000_000,
+    }],
+  });
+
+  const minimum = trimTokenEdge(editable, 'line-1', 't2', 'end', 1_800_000);
+  const capped = trimTokenEdge(editable, 'line-1', 't2', 'end', 5_500_000);
+
+  assert.equal(minimum.lines[0].tokens[1].end_us, 1_816_667);
+  assert.equal(capped.lines[0].tokens[1].end_us, 3_200_000);
+  assert.equal(capped.lines[0].end_us, 3_200_000);
+  assert.equal(capped.lines[1].start_us, 3_200_000);
+});
+
+test('shared trim boundary resizes both words and respects an adjacent lock', () => {
+  const changed = trimTokenEdge(timeline, 'line-1', 't2', 'start', 2_100_000);
+  assert.equal(changed.lines[0].tokens[0].end_us, 2_100_000);
+  assert.equal(changed.lines[0].tokens[1].start_us, 2_100_000);
+
+  const locked = structuredClone(timeline);
+  locked.lines[0].tokens[0].locked = true;
+  assert.equal(trimTokenEdge(locked, 'line-1', 't2', 'start', 2_100_000), locked);
+  assert.equal(trimTokenEdge(timeline, 'line-1', 't2', 'end', 3_000_000), timeline);
 });
 
 test('manual lyric editor changes a word and rebuilds continuous sweep progress', () => {

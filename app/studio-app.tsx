@@ -47,6 +47,7 @@ import {
   karaokeFontId,
   type KaraokeFontId,
 } from './lib/karaoke-fonts';
+import { songCreditOpacity } from './lib/song-credit';
 import {
   activeLineAt,
   confidenceLabel,
@@ -1484,6 +1485,9 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
             <SongCreditOverlay
               title={data.project.title}
               artist={data.project.artist}
+              nowUs={currentTimeUs}
+              mediaRef={videoRef}
+              playing={isPlaying}
             />
             <KaraokeOverlay
               timeline={timeline}
@@ -1640,7 +1644,7 @@ function BackgroundPreview({
   playing: boolean;
   mediaRef: { readonly current: HTMLVideoElement | null };
 }) {
-  const sampledUs = useBackgroundPreviewClock(mediaRef, nowUs, playing);
+  const sampledUs = usePreviewMediaClock(mediaRef, nowUs, playing);
   const assets = useMemo(
     () => new Map(plan.assets.map((asset) => [asset.id, asset])),
     [plan.assets],
@@ -1686,7 +1690,7 @@ function BackgroundPreview({
   );
 }
 
-function useBackgroundPreviewClock(
+function usePreviewMediaClock(
   mediaRef: { readonly current: HTMLVideoElement | null },
   fallbackNowUs: number,
   playing: boolean,
@@ -1783,11 +1787,27 @@ function BackgroundSceneMedia({
   );
 }
 
-function SongCreditOverlay({ title, artist }: { title: string; artist: string }) {
+function SongCreditOverlay({
+  title,
+  artist,
+  nowUs,
+  mediaRef,
+  playing,
+}: {
+  title: string;
+  artist: string;
+  nowUs: number;
+  mediaRef: { readonly current: HTMLVideoElement | null };
+  playing: boolean;
+}) {
+  const sampledUs = usePreviewMediaClock(mediaRef, nowUs, playing);
+  const opacity = songCreditOpacity(sampledUs);
+  if (opacity <= 0) return null;
   return (
     <div
       className="song-credit-overlay"
       aria-label={artist ? `Tên bài hát ${title}, ca sĩ hoặc nguồn ${artist}` : `Tên bài hát ${title}`}
+      style={{ opacity }}
     >
       <i aria-hidden="true" />
       <span>

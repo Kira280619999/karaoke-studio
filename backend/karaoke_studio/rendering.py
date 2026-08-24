@@ -29,6 +29,8 @@ KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000
 KARAOKE_INSTRUMENTAL_LEAD_US = 1_500_000
 KARAOKE_MAX_ROW_CHARACTERS = 48
 SONG_CREDIT_ACCENT = (242, 184, 75, 255)
+SONG_CREDIT_DURATION_SECONDS = 5.0
+SONG_CREDIT_FADE_OUT_SECONDS = 0.75
 
 
 def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int) -> int | None:
@@ -201,7 +203,7 @@ def song_credit_card(
     preset: RenderPreset,
     font_path: Path,
 ) -> Image.Image:
-    """Build the persistent title/artist card used by every exported frame."""
+    """Build the opening title/artist card burned into the first five seconds."""
     scale = max(0.45, preset.height / 1080)
     card_width = min(round(preset.width * 0.68), round(1080 * scale))
     card_height = round((142 if artist.strip() else 112) * scale)
@@ -636,10 +638,13 @@ def render_video(
     credit_x = round(preset.width * 0.04)
     credit_y = round(preset.height * 0.05)
     overlay_y = preset.height - renderer.overlay_height - round(preset.height * 0.025)
+    credit_fade_start = SONG_CREDIT_DURATION_SECONDS - SONG_CREDIT_FADE_OUT_SECONDS
     filter_graph = (
         f"{background_filter};"
-        f"[{credit_input_index}:v]format=rgba[credit];"
-        f"[bg][credit]overlay={credit_x}:{credit_y}:eof_action=repeat:format=auto[credited];"
+        f"[{credit_input_index}:v]format=rgba,"
+        f"fade=t=out:st={credit_fade_start:.2f}:d={SONG_CREDIT_FADE_OUT_SECONDS:.2f}:alpha=1[credit];"
+        f"[bg][credit]overlay={credit_x}:{credit_y}:eof_action=pass:format=auto:"
+        f"enable='lt(t,{SONG_CREDIT_DURATION_SECONDS:.1f})'[credited];"
         f"[{overlay_input_index}:v]fps={preset.ffmpeg_fps},format=rgba[ov];"
         f"[credited][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
     )
@@ -648,6 +653,12 @@ def render_video(
         "-hide_banner",
         "-y",
         *background_args,
+        "-loop",
+        "1",
+        "-framerate",
+        "30",
+        "-t",
+        f"{SONG_CREDIT_DURATION_SECONDS:.1f}",
         "-i",
         str(credit_path),
         "-thread_queue_size",

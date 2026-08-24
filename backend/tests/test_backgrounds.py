@@ -286,3 +286,118 @@ def test_full_draft_render_uses_multi_scene_background(
         check=True,
         timeout=30,
     )
+
+
+def test_exported_song_credit_fades_out_and_is_gone_after_five_seconds(
+    test_settings, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "credit-timeout-project"
+    source_dir = project_dir / "source"
+    work_dir = project_dir / "work"
+    source_dir.mkdir(parents=True)
+    work_dir.mkdir(parents=True)
+    source = source_dir / "source.mp4"
+    subprocess.run(
+        [
+            test_settings.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x101820:s=320x180:r=30:d=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=6",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(source),
+        ],
+        check=True,
+        timeout=30,
+    )
+    subprocess.run(
+        [
+            test_settings.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-vn",
+            "-c:a",
+            "pcm_s16le",
+            str(work_dir / "mix.wav"),
+        ],
+        check=True,
+        timeout=30,
+    )
+    timeline = parse_lrc("[00:01.00]Lời thử", duration_us=6_000_000)
+    project = ProjectRecord(
+        id="proj_credit_timeout",
+        title="Diệu Thay Là Chúa Ta",
+        artist="Isaac Thái",
+        state=ProjectState.IMPORTED,
+        created_at=now_iso(),
+        updated_at=now_iso(),
+        source_name=source.name,
+        lrc_name="lyrics.lrc",
+        source_sha256="sha",
+        duration_us=6_000_000,
+        width=320,
+        height=180,
+        fps="30/1",
+        has_audio=True,
+    )
+
+    output = render_video(
+        project,
+        timeline,
+        project_dir,
+        test_settings,
+        mode="draft",
+        preset_name="source",
+        countdown=False,
+        event=lambda _progress, _message: None,
+    )
+    before_path = tmp_path / "credit-before.png"
+    after_path = tmp_path / "credit-after.png"
+    for timestamp, frame_path in (("1.0", before_path), ("5.5", after_path)):
+        subprocess.run(
+            [
+                test_settings.ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                timestamp,
+                "-i",
+                str(output),
+                "-frames:v",
+                "1",
+                str(frame_path),
+            ],
+            check=True,
+            timeout=30,
+        )
+
+    before_pixel = Image.open(before_path).convert("RGB").getpixel((26, 32))
+    after_pixel = Image.open(after_path).convert("RGB").getpixel((26, 32))
+    assert before_pixel[0] > 150 and before_pixel[1] > 100 and before_pixel[2] < 130
+    assert (
+        max(
+            abs(channel - target)
+            for channel, target in zip(after_pixel, (16, 24, 32), strict=True)
+        )
+        < 20
+    )

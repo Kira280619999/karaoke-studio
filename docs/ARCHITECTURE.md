@@ -24,6 +24,7 @@ Worker ─┬─ ffprobe / FFmpeg
   models/
   projects/proj_<uuid>/
     source/                 immutable user inputs
+      background-plan.json ordered assets + lyric-gap scene schedule
     timeline.json           current TimelineV1
     history/                previous revisions
     work/
@@ -59,7 +60,7 @@ database, renderer or verification policy.
 
 - `Separator`: Audio Separator/Mel-Band RoFormer, HTDemucs FT and center-cancel fallback.
 - `Aligner`: `EnsembleSongAligner` runs the pinned Vietnamese singing lyric CTC model plus an independent speech CTC model on up to two production vocal stems. Cached 20-second emissions with two-second overlap cover the full song; a global monotonic path rejects repeated-chorus outliers before robust token/grapheme consensus and onset/sustain refinement. `AutomaticSweepCritic` then re-listens for at most three bounded passes, corrects only diverse CTC control-point consensus, preserves human timing and fails closed when onset/sustain evidence does not converge. Energy-aware is the fail-closed fallback.
-- `Renderer`: Pillow RGBA frames piped to FFmpeg. Timeline 1.1 stores an optional integer `SweepCurveV1` on every token. React preview and MP4 export share the same piecewise interpolation over absolute microseconds and `line_progress_ppm`, eliminating renderer/editor motion drift.
+- `Renderer`: Pillow RGBA frames piped to FFmpeg. Timeline 1.1 stores an optional integer `SweepCurveV1` on every token. React preview and MP4 export share the same piecewise interpolation over absolute microseconds and `line_progress_ppm`, eliminating renderer/editor motion drift. Custom visual libraries are represented by `BackgroundPlanV1`: ordered checksum-pinned image/video assets are scheduled across the whole song, scene boundaries prefer lyric gaps, and both React preview and FFmpeg `xfade` consume the same integer-microsecond manifest.
 
 Timeline 1.0 remains readable and is upgraded on save. The adapter contracts stay independent from the canonical timeline, so another language, model or renderer can be added without changing project ownership or visible lyric text.
 
@@ -73,6 +74,6 @@ During review the proxy and singer-reference export use `work/mix.wav`, preservi
 
 - Upload filenames are reduced to safe basenames and bounded length.
 - Artifact serving resolves the requested path and rejects anything outside the project directory.
-- LRC upload size is capped; unsupported source/background extensions fail closed.
+- Timeline and background upload sizes/counts are capped; unsupported source/background extensions fail closed.
 - SQLite uses foreign keys, WAL, busy timeout and optimistic timeline revisions.
 - Media, weights, caches, databases and output formats are excluded from Git.

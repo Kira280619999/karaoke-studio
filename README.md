@@ -11,6 +11,7 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 ### Chức năng đã có trong v0.1.0
 
 - Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
+- Nền thay thế nhận một hoặc nhiều ảnh/video (tối đa 64 cảnh). App giữ đúng thứ tự tệp người dùng chọn, tự chia toàn bài, ưu tiên dissolve ở khoảng nghỉ/ranh giới câu sau khi AI căn lời, và lưu `background-plan.json` để preview với MP4 xuất ra dùng cùng một lịch cảnh. Ảnh dọc/ngang đều tự phủ kín khung hình; video nền được lặp cục bộ và không thay thế audio đang dùng để kiểm tra timing.
 - Kiểm tra nguồn bằng `ffprobe`, SHA-256, audio/video stream, duration, rotation và VFR; editor dùng proxy CFR, nguồn gốc không bị sửa.
 - Pipeline tiếp tục được sau gián đoạn nhờ manifest, SQLite WAL, timeline revision và checksum.
 - Adapter tách giọng cho Mel-Band RoFormer qua Audio Separator, `htdemucs_ft`, cùng center-cancel fallback bắt buộc kiểm duyệt.
@@ -106,7 +107,7 @@ Hai separator tùy chọn: [Audio Separator](https://github.com/surfer312/audio-
 
 ### Workflow Verified
 
-1. Nhập video, LRC, background tùy chọn và quyết định có chấp nhận model CTC phi thương mại hay không.
+1. Nhập video, timeline lời và nền tùy chọn. Có thể chọn nhiều ảnh/video cho chế độ tự dựng chuyển cảnh, rồi quyết định có chấp nhận model CTC phi thương mại hay không.
 2. App tự chạy tách giọng + căn lời đến hết bài ngay sau khi import; job có thể resume từ artifact hợp lệ.
 3. Nghe bản gốc có ca sĩ trong editor. Bấm token để loop; riêng chữ đầu tự phát từ đuôi câu trước. Kéo mốc bằng tai theo 10 ms/1 frame rồi duyệt, không có AI suggestion trong chế độ thủ công.
 4. Chỉ kiểm tra các dòng/token có reason code như model/stem bất đồng, câu quá nhanh, nốt ngân chưa chắc, LRC lệch xa hoặc vocal yếu; chỉnh mốc rồi duyệt dòng đó.
@@ -119,7 +120,8 @@ Trạng thái chuẩn: `IMPORTED → SEPARATED → ALIGNED → NEEDS_REVIEW → 
 
 | Method | Endpoint | Mục đích |
 |---|---|---|
-| `POST` | `/api/projects` | Import video, LRC và background |
+| `POST` | `/api/projects` | Import video, timeline và một hoặc nhiều background |
+| `GET` | `/api/projects/{id}/background-plan` | Đọc lịch cảnh nền tự động dùng chung cho preview/render |
 | `POST` | `/api/projects/{id}/process` | Chạy/tiếp tục tách giọng và căn lời |
 | `GET` | `/api/jobs/{id}/events` | SSE progress, warning và terminal state |
 | `GET/PATCH` | `/api/projects/{id}/timeline` | Đọc/sửa `TimelineV1` bằng optimistic revision |

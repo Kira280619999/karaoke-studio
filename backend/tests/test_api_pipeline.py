@@ -26,6 +26,7 @@ def _import_project(client: TestClient, synthetic_video: Path) -> dict:
                 "artist": "Fixture",
                 "background_mode": "original",
                 "karaoke_font": "be_vietnam_pro",
+                "karaoke_color": "red",
             },
             files={
                 "video": ("fixture.mp4", video, "video/mp4"),
@@ -44,6 +45,7 @@ def test_import_api_and_path_traversal_guard(test_settings, synthetic_video: Pat
     timeline = client.get(f"/api/projects/{project['id']}/timeline").json()["timeline"]
     assert timeline["schema_version"] == "1.1"
     assert timeline["metadata"]["karaoke_font"] == "be_vietnam_pro"
+    assert timeline["metadata"]["karaoke_color"] == "red"
     suggestion = client.post(
         f"/api/projects/{project['id']}/timing-suggestions",
         json={"line_id": timeline["lines"][0]["id"]},
@@ -111,6 +113,18 @@ def test_font_assets_and_invalid_import_font(test_settings, synthetic_video: Pat
             },
         )
     assert invalid.status_code == 400
+
+    with synthetic_video.open("rb") as video:
+        invalid_color = client.post(
+            "/api/projects",
+            data={"background_mode": "original", "karaoke_color": "blue"},
+            files={
+                "video": ("fixture.mp4", video, "video/mp4"),
+                "lrc": ("fixture.lrc", LRC.encode(), "text/plain"),
+            },
+        )
+    assert invalid_color.status_code == 400
+    assert "karaoke_color" in invalid_color.text
 
 
 def test_timeline_patch_persists_revision_and_rejects_stale_autosave(

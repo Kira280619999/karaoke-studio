@@ -29,6 +29,33 @@ export interface Project {
   error: string | null;
 }
 
+export interface BackgroundAssetV1 {
+  id: string;
+  filename: string;
+  kind: 'image' | 'video';
+  sha256: string;
+  width: number;
+  height: number;
+  source_duration_us: number | null;
+  url: string | null;
+}
+
+export interface BackgroundSegmentV1 {
+  asset_id: string;
+  start_us: number;
+  end_us: number;
+  transition_us: number;
+  anchor: 'song_start' | 'lyric_gap' | 'balanced';
+}
+
+export interface BackgroundPlanV1 {
+  schema_version: '1.0';
+  strategy: 'lyric_gap_balanced';
+  duration_us: number;
+  assets: BackgroundAssetV1[];
+  segments: BackgroundSegmentV1[];
+}
+
 export interface TokenTiming {
   id: string;
   text: string;
@@ -169,4 +196,5 @@ export interface Capabilities {
     singing_specific: boolean;
   };
   karaoke_fonts: { id: string; label: string }[];
+  karaoke_colors: { id: string; label: string }[];
 }

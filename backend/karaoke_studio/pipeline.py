@@ -10,6 +10,7 @@ from .alignment import (
     VIETNAMESE_MODEL_LICENSE,
     VIETNAMESE_MODEL_REVISION,
 )
+from .backgrounds import refresh_background_plan
 from .db import Store
 from .ensemble import align_timeline_ensemble, alignment_policy
 from .media import extract_audio, make_proxy, probe, run, sha256_file, waveform_envelope
@@ -291,6 +292,9 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         ),
         encoding="utf-8",
     )
+    if project.background_mode == "custom":
+        context.emit(0.83, "Đang đồng bộ chuyển cảnh nền theo timing lời đã căn…")
+        refresh_background_plan(project, timeline, project_dir, settings)
     store.update_project(project_id, state=ProjectState.ALIGNED)
 
     context.emit(0.84, "Đang tạo waveform cho màn hình kiểm duyệt…")

@@ -9,16 +9,18 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from .backgrounds import BackgroundPlanV1, refresh_background_plan
 from .models import LineTiming, ProjectRecord, ProjectState, TimelineV1
 from .motion import line_progress_ppm, load_font, resolve_font
 from .separation import load_candidates
 from .settings import Settings
+from .styles import karaoke_color_rgba
 
 EventCallback = Callable[[float, str], None]
-GOLD = (246, 187, 71, 255)
 WHITE = (248, 247, 241, 255)
 PREVIEW = (215, 222, 231, 235)
 INK = (0, 0, 0, 225)
+KARAOKE_SHADOW = (5, 16, 59, 245)
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ class LineAsset:
         width: int,
         overlay_height: int,
         active: bool,
+        highlight_color: tuple[int, int, int, int],
     ):
         self.line = line
         self.font = font
@@ -66,31 +69,42 @@ class LineAsset:
         self.text_width = self.natural_text_width * self.scale_x
         self.left = (width - self.text_width) / 2
         self.base = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(self.base)
-        bbox = draw.textbbox((width / 2, y), line.text, font=font, anchor="mm", stroke_width=5)
-        plate = (
-            round(width * 0.045),
-            bbox[1] - 17,
-            round(width * 0.955),
-            bbox[3] + 19,
-        )
-        draw.rounded_rectangle(
-            plate,
-            radius=22,
-            fill=(2, 6, 14, 255),
-            outline=(246, 187, 71, 105 if active else 45),
-            width=2,
+        stroke_width = max(4, round(font.size * 0.075))
+        shadow_offset = max(3, round(font.size * 0.065))
+        self._paste_text_layer(
+            self.base,
+            y + shadow_offset,
+            KARAOKE_SHADOW,
+            stroke_width=stroke_width,
+            stroke_fill=KARAOKE_SHADOW,
         )
         self._paste_text_layer(
             self.base,
             y,
             WHITE if active else PREVIEW,
-            stroke_width=5,
-            stroke_fill=INK,
+            stroke_width=stroke_width,
+            stroke_fill=KARAOKE_SHADOW,
         )
-        self.gold = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
-        self._paste_text_layer(self.gold, y, GOLD)
-        self.glow = self.gold.filter(ImageFilter.GaussianBlur(max(5, round(font.size * 0.13))))
+        self.highlight = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+        self._paste_text_layer(
+            self.highlight,
+            y + shadow_offset,
+            KARAOKE_SHADOW,
+            stroke_width=stroke_width,
+            stroke_fill=KARAOKE_SHADOW,
+        )
+        self._paste_text_layer(
+            self.highlight,
+            y,
+            highlight_color,
+            stroke_width=stroke_width,
+            stroke_fill=WHITE,
+        )
+        color_layer = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+        self._paste_text_layer(color_layer, y, highlight_color)
+        self.glow = color_layer.filter(
+            ImageFilter.GaussianBlur(max(4, round(font.size * 0.09)))
+        )
 
     def _paste_text_layer(
         self,
@@ -136,7 +150,8 @@ class KaraokeRenderer:
         self.countdown = countdown
         self.font_id = timeline.metadata.get("karaoke_font", "noto_sans")
         self.font_path = resolve_font(settings, self.font_id)
-        self.font = load_font(self.font_path, round(self.preset.height * 0.058))
+        self.highlight_color = karaoke_color_rgba(timeline.metadata.get("karaoke_color"))
+        self.font = load_font(self.font_path, round(self.preset.height * 0.072))
         self.line_fonts: dict[str, ImageFont.FreeTypeFont] = {}
         self.line_scales: dict[str, float] = {}
         self.assets: dict[tuple[int, bool], LineAsset] = {}
@@ -147,10 +162,22 @@ class KaraokeRenderer:
             y = self.lane_y[index % 2]
             self.line_fonts[line.id] = self.font
             self.assets[(index, True)] = LineAsset(
-                line, self.font, y, self.width, self.overlay_height, True
+                line,
+                self.font,
+                y,
+                self.width,
+                self.overlay_height,
+                True,
+                self.highlight_color,
             )
             self.assets[(index, False)] = LineAsset(
-                line, self.font, y, self.width, self.overlay_height, False
+                line,
+                self.font,
+                y,
+                self.width,
+                self.overlay_height,
+                False,
+                self.highlight_color,
             )
             self.line_scales[line.id] = self.assets[(index, True)].scale_x
 
@@ -211,7 +238,9 @@ class KaraokeRenderer:
         if glow_right > 0:
             frame.alpha_composite(asset.glow.crop((0, 0, glow_right, self.overlay_height)), (0, 0))
         if boundary > 0:
-            frame.alpha_composite(asset.gold.crop((0, 0, boundary, self.overlay_height)), (0, 0))
+            frame.alpha_composite(
+                asset.highlight.crop((0, 0, boundary, self.overlay_height)), (0, 0)
+            )
 
     def _highlight_boundary(self, line: LineTiming, left: float, now_us: int) -> float:
         font = self.line_fonts.get(line.id, self.font)
@@ -243,7 +272,7 @@ class KaraokeRenderer:
         draw.ellipse(
             (center - radius, y - radius, center + radius, y + radius),
             fill=(2, 7, 16, 190),
-            outline=GOLD,
+            outline=self.highlight_color,
             width=3,
         )
         font = load_font(self.font_path, round(self.font.size * 0.92))
@@ -252,7 +281,7 @@ class KaraokeRenderer:
             str(number),
             font=font,
             anchor="mm",
-            fill=GOLD,
+            fill=self.highlight_color,
             stroke_width=2,
             stroke_fill=INK,
         )
@@ -287,9 +316,6 @@ def render_video(
     if not audio_input.is_file():
         raise RuntimeError("Không tìm thấy audio dùng cho bản render.")
     source = project_dir / "source" / project.source_name
-    background = source
-    if project.background_mode == "custom" and project.background_name:
-        background = project_dir / "source" / project.background_name
     preset = resolve_preset(preset_name, project)
     timeline = timeline.model_copy(deep=True)
     timeline.fps_numerator = preset.fps_numerator
@@ -304,19 +330,21 @@ def render_video(
     log_path = project_dir / "logs" / f"render-{mode}-{preset_name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    background_args: list[str]
-    if background.suffix.casefold() in {".png", ".jpg", ".jpeg", ".webp"}:
-        background_args = ["-loop", "1", "-framerate", preset.ffmpeg_fps, "-i", str(background)]
-    elif background != source:
-        background_args = ["-stream_loop", "-1", "-i", str(background)]
-    else:
-        background_args = ["-i", str(background)]
+    background_args, background_filter, background_input_count = _background_render_pipeline(
+        project,
+        timeline,
+        project_dir,
+        source,
+        preset,
+        settings,
+    )
+    overlay_input_index = background_input_count
+    audio_input_index = background_input_count + 1
     overlay_y = preset.height - renderer.overlay_height - round(preset.height * 0.025)
     filter_graph = (
-        f"[0:v]fps={preset.ffmpeg_fps},scale={preset.width}:{preset.height}:force_original_aspect_ratio=decrease,"
-        f"pad={preset.width}:{preset.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,"
-        f"tpad=stop_mode=clone:stop_duration={timeline.duration_us / 1_000_000:.6f}[bg];"
-        f"[1:v]fps={preset.ffmpeg_fps},format=rgba[ov];[bg][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
+        f"{background_filter};"
+        f"[{overlay_input_index}:v]fps={preset.ffmpeg_fps},format=rgba[ov];"
+        f"[bg][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
     )
     command = [
         settings.ffmpeg,
@@ -342,7 +370,7 @@ def render_video(
         "-map",
         "[v]",
         "-map",
-        "2:a:0",
+        f"{audio_input_index}:a:0",
         "-af",
         "alimiter=limit=0.8913:level=false:latency=true",
         "-t",
@@ -394,6 +422,85 @@ def render_video(
         raise RuntimeError(f"FFmpeg render thất bại.\n{tail}")
     event(0.86, "Render hoàn tất; đang chạy full decode và QA…")
     return output
+
+
+def _background_render_pipeline(
+    project: ProjectRecord,
+    timeline: TimelineV1,
+    project_dir: Path,
+    source: Path,
+    preset: RenderPreset,
+    settings: Settings,
+) -> tuple[list[str], str, int]:
+    if project.background_mode != "custom":
+        duration = timeline.duration_us / 1_000_000
+        graph = (
+            f"[0:v]fps={preset.ffmpeg_fps},"
+            f"scale={preset.width}:{preset.height}:force_original_aspect_ratio=decrease,"
+            f"pad={preset.width}:{preset.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"setsar=1,tpad=stop_mode=clone:stop_duration={duration:.6f}[bg]"
+        )
+        return ["-i", str(source)], graph, 1
+
+    plan = refresh_background_plan(project, timeline, project_dir, settings)
+    if plan is None or not plan.segments:
+        raise RuntimeError("Project chưa có lịch chuyển cảnh nền.")
+    return _custom_background_pipeline(plan, project_dir, preset)
+
+
+def _custom_background_pipeline(
+    plan: BackgroundPlanV1,
+    project_dir: Path,
+    preset: RenderPreset,
+) -> tuple[list[str], str, int]:
+    assets_by_id = {asset.id: asset for asset in plan.assets}
+    input_args: list[str] = []
+    filters: list[str] = []
+    for index, segment in enumerate(plan.segments):
+        asset = assets_by_id.get(segment.asset_id)
+        if asset is None:
+            raise RuntimeError(f"Lịch nền tham chiếu asset không tồn tại: {segment.asset_id}")
+        path = project_dir / "source" / asset.filename
+        if not path.is_file():
+            raise RuntimeError(f"Không tìm thấy nền: {asset.filename}")
+        if asset.kind == "image":
+            input_args.extend(["-loop", "1", "-framerate", preset.ffmpeg_fps, "-i", str(path)])
+        else:
+            input_args.extend(["-stream_loop", "-1", "-i", str(path)])
+
+        outgoing_transition_us = (
+            plan.segments[index + 1].transition_us
+            if index + 1 < len(plan.segments)
+            else 0
+        )
+        clip_duration_us = segment.end_us - segment.start_us + outgoing_transition_us
+        filters.append(
+            f"[{index}:v]fps={preset.ffmpeg_fps},"
+            f"scale={preset.width}:{preset.height}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={preset.width}:{preset.height},setsar=1,settb=AVTB,"
+            f"trim=duration={clip_duration_us / 1_000_000:.6f},"
+            f"setpts=PTS-STARTPTS,format=yuv420p[bg{index}]"
+        )
+
+    chain_label = "bg0"
+    for index, segment in enumerate(plan.segments[1:], start=1):
+        output_label = f"bgmix{index}"
+        if segment.transition_us > 0:
+            filters.append(
+                f"[{chain_label}][bg{index}]xfade=transition=fade:"
+                f"duration={segment.transition_us / 1_000_000:.6f}:"
+                f"offset={segment.start_us / 1_000_000:.6f}[{output_label}]"
+            )
+        else:
+            filters.append(
+                f"[{chain_label}][bg{index}]concat=n=2:v=1:a=0[{output_label}]"
+            )
+        chain_label = output_label
+    filters.append(
+        f"[{chain_label}]trim=duration={plan.duration_us / 1_000_000:.6f},"
+        "setpts=PTS-STARTPTS[bg]"
+    )
+    return input_args, ";".join(filters), len(plan.segments)
 
 
 def render_preview_png(

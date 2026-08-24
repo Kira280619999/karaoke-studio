@@ -39,6 +39,23 @@ def test_preview_frame_has_native_dimensions(test_settings) -> None:
     assert renderer.frame(1_000_000).size == (1920, 360)
 
 
+def test_renderer_uses_selected_sweep_color_without_a_black_lyric_plate(
+    test_settings,
+) -> None:
+    timeline = parse_lrc("[00:00.00]Ngài là ánh sáng", duration_us=2_000_000)
+    timeline.metadata["karaoke_color"] = "red"
+    renderer = KaraokeRenderer(
+        timeline, RenderPreset(1280, 720, 60, 1), test_settings, False, True
+    )
+    asset = renderer.assets[(0, True)]
+
+    assert renderer.highlight_color == (255, 54, 87, 255)
+    colors = asset.highlight.getcolors(maxcolors=asset.highlight.width * asset.highlight.height)
+    assert colors is not None
+    assert any(pixel[:3] == (255, 54, 87) for _count, pixel in colors)
+    assert asset.base.getpixel((round(1280 * 0.05), renderer.lane_y[0]))[3] == 0
+
+
 def test_long_vietnamese_line_is_fitted_and_draft_mark_is_visible(test_settings) -> None:
     timeline = parse_lrc(
         "[00:00.00]Nguyện tình yêu thương soi sáng mọi con đường chúng ta đang bước",
@@ -108,4 +125,4 @@ def test_renderer_uses_timeline_font_without_changing_fixed_size(test_settings) 
     )
 
     assert renderer.font_path.name == "BeVietnamPro-Bold.ttf"
-    assert {asset.font.size for asset in renderer.assets.values()} == {63}
+    assert {asset.font.size for asset in renderer.assets.values()} == {78}

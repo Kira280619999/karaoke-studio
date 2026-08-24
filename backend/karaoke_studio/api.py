@@ -18,6 +18,14 @@ from .alignment import (
     LYRIC_MODEL_REVISION,
     suggest_line_timing,
 )
+from .backgrounds import (
+    BACKGROUND_EXTENSIONS,
+    MAX_BACKGROUND_ASSETS,
+    BackgroundPlanV1,
+    build_background_plan,
+    refresh_background_plan,
+    save_background_plan,
+)
 from .db import RevisionConflict, Store, now_iso
 from .ensemble import evidence_review_issues
 from .fonts import KARAOKE_FONTS, is_karaoke_font_id, normalize_karaoke_font_id
@@ -41,6 +49,11 @@ from .motion import remap_timeline_sweep_font, resolve_font
 from .rendering import render_preview_png
 from .separation import load_candidates
 from .settings import Settings
+from .styles import (
+    KARAOKE_COLORS,
+    is_karaoke_color_id,
+    normalize_karaoke_color_id,
+)
 from .timeline import validate_timeline
 from .timeline_source import (
     SUPPORTED_TIMELINE_EXTENSIONS,
@@ -50,7 +63,6 @@ from .timeline_source import (
 
 MAX_TIMELINE_BYTES = 10 * 1024 * 1024
 MEDIA_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
-BACKGROUND_EXTENSIONS = MEDIA_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def create_app(custom_settings: Settings | None = None) -> FastAPI:
@@ -105,6 +117,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             "karaoke_fonts": [
                 {"id": spec.id, "label": spec.label} for spec in KARAOKE_FONTS
             ],
+            "karaoke_colors": [
+                {"id": spec.id, "label": spec.label} for spec in KARAOKE_COLORS
+            ],
         }
 
     @app.get("/api/projects", response_model=list[ProjectRecord])
@@ -115,12 +130,13 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     async def create_project(
         video: UploadFile = File(...),
         lrc: UploadFile | None = File(None),
-        background: UploadFile | None = File(None),
+        background: list[UploadFile] | None = File(None),
         timeline_text: str = Form(""),
         title: str = Form(""),
         artist: str = Form(""),
         background_mode: str = Form("original"),
         karaoke_font: str = Form("noto_sans"),
+        karaoke_color: str = Form("yellow"),
     ) -> ProjectRecord:
         video_suffix = Path(video.filename or "").suffix.casefold()
         if video_suffix not in MEDIA_EXTENSIONS:
@@ -138,13 +154,18 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             raise HTTPException(400, "background_mode không hợp lệ.")
         if not is_karaoke_font_id(karaoke_font):
             raise HTTPException(400, "karaoke_font không hợp lệ.")
-        if background_mode == "custom" and not background:
-            raise HTTPException(400, "Chế độ custom yêu cầu background.")
-        if (
-            background
-            and Path(background.filename or "").suffix.casefold() not in BACKGROUND_EXTENSIONS
+        if not is_karaoke_color_id(karaoke_color):
+            raise HTTPException(400, "karaoke_color không hợp lệ.")
+        background_uploads = background or []
+        if background_mode == "custom" and not background_uploads:
+            raise HTTPException(400, "Chế độ custom yêu cầu ít nhất một ảnh hoặc video nền.")
+        if len(background_uploads) > MAX_BACKGROUND_ASSETS:
+            raise HTTPException(400, f"Tối đa {MAX_BACKGROUND_ASSETS} ảnh/video nền.")
+        if any(
+            Path(upload.filename or "").suffix.casefold() not in BACKGROUND_EXTENSIONS
+            for upload in background_uploads
         ):
-            raise HTTPException(400, "Background không được hỗ trợ.")
+            raise HTTPException(400, "Có background không được hỗ trợ.")
 
         project_id = f"proj_{uuid4().hex[:16]}"
         project_dir = store.project_dir(project_id)
@@ -159,6 +180,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         source_path = source_dir / source_name
         lrc_path = source_dir / lrc_name
         background_name: str | None = None
+        background_paths: list[Path] = []
         try:
             await _stream_upload(video, source_path)
             if lrc is not None:
@@ -172,14 +194,27 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(413, "Nội dung timeline vượt quá 10 MB.")
                 lrc_text = timeline_text
             lrc_path.write_text(lrc_text, encoding="utf-8")
-            if background:
-                background_name = safe_filename(
-                    background.filename or "background.mp4", "background.mp4"
+            for index, upload in enumerate(background_uploads):
+                suffix = Path(upload.filename or "").suffix.casefold()
+                original_name = safe_filename(
+                    upload.filename or f"background{suffix}", f"background{suffix}"
                 )
-                await _stream_upload(background, source_dir / background_name)
+                stored_name = safe_filename(
+                    f"background-{index + 1:02d}-{original_name}",
+                    f"background-{index + 1:02d}{suffix}",
+                )
+                destination = source_dir / stored_name
+                await _stream_upload(upload, destination)
+                background_paths.append(destination)
+            if background_paths:
+                background_name = background_paths[0].name
             info = probe(source_path, settings)
             timeline = parse_timeline_source(lrc_text, info.duration_us, filename=lrc_name)
             timeline.metadata["karaoke_font"] = normalize_karaoke_font_id(karaoke_font)
+            timeline.metadata["karaoke_color"] = normalize_karaoke_color_id(karaoke_color)
+            if background_paths:
+                plan = build_background_plan(background_paths, timeline, settings)
+                save_background_plan(project_dir, plan)
             timestamp = now_iso()
             record = ProjectRecord(
                 id=project_id,
@@ -275,6 +310,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             patch.timeline.metadata.get("karaoke_font")
         )
         patch.timeline.metadata["karaoke_font"] = selected_font
+        patch.timeline.metadata["karaoke_color"] = normalize_karaoke_color_id(
+            patch.timeline.metadata.get("karaoke_color")
+        )
         if selected_font != current_font:
             patch.timeline = remap_timeline_sweep_font(
                 patch.timeline, resolve_font(settings, selected_font)
@@ -463,6 +501,38 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         timeline = store.load_timeline(project_id)
         time_us = max(0, min(timeline.duration_us - 1, time_us))
         return Response(render_preview_png(timeline, settings, time_us), media_type="image/png")
+
+    @app.get(
+        "/api/projects/{project_id}/background-plan",
+        response_model=BackgroundPlanV1,
+    )
+    def background_plan(project_id: str) -> BackgroundPlanV1:
+        project = _require_project(store, project_id)
+        if project.background_mode != "custom":
+            raise HTTPException(404, "Project đang dùng video gốc.")
+        try:
+            plan = refresh_background_plan(
+                project,
+                store.load_timeline(project_id),
+                store.project_dir(project_id),
+                settings,
+            )
+        except MediaError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if plan is None:
+            raise HTTPException(404, "Project chưa có lịch nền thay thế.")
+        assets = [
+            asset.model_copy(
+                update={
+                    "url": (
+                        f"/api/projects/{project_id}/files/source/"
+                        f"{quote(asset.filename)}"
+                    )
+                }
+            )
+            for asset in plan.assets
+        ]
+        return plan.model_copy(update={"assets": assets})
 
     @app.get("/api/projects/{project_id}/files/{relative_path:path}")
     def project_file(project_id: str, relative_path: str) -> FileResponse:

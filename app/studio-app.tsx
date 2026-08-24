@@ -18,6 +18,13 @@ import {
 import { API_BASE, ApiError, api, assetUrl } from './lib/api';
 import { JobMonitor } from './lib/job-monitor';
 import {
+  KARAOKE_COLORS,
+  karaokeColorHex,
+  karaokeColorId,
+  karaokeColorLabel,
+  type KaraokeColorId,
+} from './lib/karaoke-colors';
+import {
   KARAOKE_FONTS,
   karaokeFontFamily,
   karaokeFontId,
@@ -50,6 +57,8 @@ import {
 } from './lib/timeline';
 import type {
   Artifact,
+  BackgroundAssetV1,
+  BackgroundPlanV1,
   Capabilities,
   Job,
   LineTiming,
@@ -69,6 +78,7 @@ interface WorkspaceData {
   timeline: Timeline;
   issues: TimelineIssue[];
   artifacts: Artifact[];
+  backgroundPlan: BackgroundPlanV1 | null;
   waveform: WaveformPayload | null;
 }
 
@@ -121,16 +131,25 @@ export default function StudioApp() {
       api<Artifact[]>(`/api/projects/${projectId}/artifacts`),
     ]);
     let waveform: WaveformPayload | null = null;
+    let backgroundPlan: BackgroundPlanV1 | null = null;
     try {
       waveform = await api<WaveformPayload>(`/api/projects/${projectId}/waveform`);
     } catch {
       // Waveform is created during processing; IMPORTED projects do not have one yet.
+    }
+    if (project.background_mode === 'custom') {
+      try {
+        backgroundPlan = await api<BackgroundPlanV1>(`/api/projects/${projectId}/background-plan`);
+      } catch {
+        // Old projects can still open if their custom background file is unavailable.
+      }
     }
     setWorkspace({
       project,
       timeline: timelineResponse.timeline,
       issues: timelineResponse.issues,
       artifacts,
+      backgroundPlan,
       waveform,
     });
     setError(null);
@@ -375,7 +394,9 @@ function CreateProject({
   const [timelineFileName, setTimelineFileName] = useState('');
   const [timelineText, setTimelineText] = useState('');
   const [backgroundMode, setBackgroundMode] = useState<'original' | 'custom'>('original');
+  const [backgroundFiles, setBackgroundFiles] = useState<File[]>([]);
   const [karaokeFont, setKaraokeFont] = useState<KaraokeFontId>('noto_sans');
+  const [karaokeColor, setKaraokeColor] = useState<KaraokeColorId>('yellow');
   const [acceptModelLicense, setAcceptModelLicense] = useState(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -400,6 +421,7 @@ function CreateProject({
       }
       payload.set('background_mode', backgroundMode);
       payload.set('karaoke_font', karaokeFont);
+      payload.set('karaoke_color', karaokeColor);
       const project = await api<Project>('/api/projects', { method: 'POST', body: payload });
       await onCreated(project, acceptModelLicense);
     } catch (cause) {
@@ -476,13 +498,43 @@ function CreateProject({
           <label><span>Ca sĩ / nguồn</span><input name="artist" placeholder="Không bắt buộc" /></label>
         </div>
         <KaraokeFontPicker value={karaokeFont} onChange={setKaraokeFont} />
+        <KaraokeColorPicker value={karaokeColor} onChange={setKaraokeColor} />
         <fieldset className="background-choice">
           <legend>Hình ảnh đầu ra</legend>
           <label><input type="radio" checked={backgroundMode === 'original'} onChange={() => setBackgroundMode('original')} /><span><strong>Giữ video gốc</strong><small>Thay audio bằng instrumental</small></span></label>
-          <label><input type="radio" checked={backgroundMode === 'custom'} onChange={() => setBackgroundMode('custom')} /><span><strong>Nền thay thế</strong><small>Ảnh hoặc video riêng</small></span></label>
+          <label><input type="radio" checked={backgroundMode === 'custom'} onChange={() => setBackgroundMode('custom')} /><span><strong>Nền thay thế tự động</strong><small>Một hoặc nhiều ảnh/video</small></span></label>
         </fieldset>
         {backgroundMode === 'custom' && (
-          <label className="background-upload"><span>Background</span><input required type="file" name="background" accept="video/*,image/*" /></label>
+          <div className={`background-library ${backgroundFiles.length ? 'selected' : ''}`}>
+            <label className="background-upload">
+              <span className="background-upload-icon">＋</span>
+              <span>
+                <strong>{backgroundFiles.length ? `${backgroundFiles.length} cảnh đã chọn` : 'Chọn nhiều ảnh hoặc video'}</strong>
+                <small>Giữ ⌘ hoặc Shift để chọn nhiều file cùng lúc · tối đa 64 cảnh</small>
+              </span>
+              <b>{backgroundFiles.length ? 'Chọn lại' : 'Mở thư viện'}</b>
+              <input
+                required
+                multiple
+                type="file"
+                name="background"
+                accept="video/*,image/jpeg,image/png,image/webp,image/bmp,image/tiff"
+                onChange={(event) => setBackgroundFiles(Array.from(event.target.files ?? []))}
+              />
+            </label>
+            {backgroundFiles.length > 0 && (
+              <div className="background-scene-list" aria-label="Danh sách cảnh nền đã chọn">
+                {backgroundFiles.map((file, index) => (
+                  <span key={`${file.name}-${file.lastModified}-${index}`} title={file.name}>
+                    <i>{String(index + 1).padStart(2, '0')}</i>
+                    <b>{file.type.startsWith('video/') ? 'VIDEO' : 'ẢNH'}</b>
+                    <em>{file.name}</em>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="background-auto-note"><i>✦</i><span><strong>TỰ DỰNG CHUYỂN CẢNH</strong> Hệ thống chia đều nhịp hình, ưu tiên đổi ở khoảng nghỉ/ranh giới câu và dissolve nhẹ để không làm phân tâm lời Karaoke.</span></p>
+          </div>
         )}
         <label className="license-check"><input type="checkbox" checked={acceptModelLicense} onChange={(event) => setAcceptModelLicense(event.target.checked)} /><span><strong>Dùng Karaoke AI Maximum Accuracy</strong><small>Hai model × hai vocal stem, CC-BY-NC-4.0 cho mục đích phi thương mại. Nếu bỏ chọn, app vẫn chạy energy fallback nhưng không tự Verified.</small></span></label>
         <button className="primary-action" disabled={submitting || busy || !capabilities?.ffmpeg} type="submit">
@@ -761,6 +813,13 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     if (karaokeFontId(timelineRef.current.metadata) === fontId) return;
     const next = structuredClone(timelineRef.current);
     next.metadata = { ...next.metadata, karaoke_font: fontId };
+    applyTimeline(next);
+  };
+
+  const selectKaraokeColor = (colorId: KaraokeColorId) => {
+    if (karaokeColorId(timelineRef.current.metadata) === colorId) return;
+    const next = structuredClone(timelineRef.current);
+    next.metadata = { ...next.metadata, karaoke_color: colorId };
     applyTimeline(next);
   };
 
@@ -1044,12 +1103,19 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     <section className="fcp-editor-workspace">
         <section className="monitor-panel">
           <div className="panel-toolbar">
-            <div><span className="viewer-title">VIEWER</span><strong className="mix-audio-badge">● ORIGINAL MIX</strong></div>
+            <div><span className="viewer-title">VIEWER</span><strong className="mix-audio-badge">● ORIGINAL MIX</strong>{data.backgroundPlan && <strong className="auto-scene-badge">✦ AUTO SCENE · {data.backgroundPlan.assets.length}</strong>}</div>
             <span className="viewer-timecode">{formatFrameTime(currentTimeUs, timeline)} <i>/</i> {formatFrameTime(timeline.duration_us, timeline)}</span>
             <div className="viewer-tools" aria-hidden="true"><span>⌗</span><span>▣</span><span>100%</span></div>
           </div>
           <div className="monitor-stage">
-            <video ref={videoRef} src={videoUrl} preload="metadata" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onEnded={() => setIsPlaying(false)} onTimeUpdate={(event) => {
+            {data.backgroundPlan && (
+              <BackgroundPreview
+                plan={data.backgroundPlan}
+                nowUs={currentTimeUs}
+                playing={isPlaying}
+              />
+            )}
+            <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onEnded={() => setIsPlaying(false)} onTimeUpdate={(event) => {
               const nowUs = Math.round(event.currentTarget.currentTime * 1_000_000);
               const audition = loopRangeRef.current;
               if (audition && nowUs >= audition.endUs) {
@@ -1132,11 +1198,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
               <section className="text-inspector">
                 <div><span className="section-kicker">TEXT INSPECTOR</span><h2>Hai dòng Karaoke cố định</h2><p>Font được áp dụng đồng nhất cho Preview và video xuất. Mọi thay đổi đều tự lưu vào TimelineV1.</p></div>
                 <KaraokeFontPicker compact value={karaokeFontId(timeline.metadata)} onChange={selectKaraokeFont} />
+                <KaraokeColorPicker compact value={karaokeColorId(timeline.metadata)} onChange={selectKaraokeColor} />
                 <div className="inspector-parameter-list">
                   <div><span>Bố cục</span><strong>2 lane cố định</strong></div>
-                  <div><span>Chuyển động</span><strong>Vocal hybrid</strong></div>
-                  <div><span>Quét chữ</span><strong>Continuous</strong></div>
-                  <div><span>Màu active</span><strong><i className="gold-swatch" /> Karaoke Gold</strong></div>
+                  <div><span>Chuyển động</span><strong>Quét màu theo giọng hát</strong></div>
+                  <div><span>Kiểu chữ</span><strong>Viền trắng · bóng xanh</strong></div>
+                  <div><span>Màu active</span><strong><i className="karaoke-color-swatch" style={{ background: karaokeColorHex(karaokeColorId(timeline.metadata)) }} /> {karaokeColorLabel(karaokeColorId(timeline.metadata))}</strong></div>
                   <div><span>Xuất hình</span><strong>Native 60 fps</strong></div>
                 </div>
               </section>
@@ -1203,6 +1270,114 @@ function PipelineStatus({ project, job }: { project: Project; job: Job | null })
   );
 }
 
+function BackgroundPreview({
+  plan,
+  nowUs,
+  playing,
+}: {
+  plan: BackgroundPlanV1;
+  nowUs: number;
+  playing: boolean;
+}) {
+  const assets = useMemo(
+    () => new Map(plan.assets.map((asset) => [asset.id, asset])),
+    [plan.assets],
+  );
+  const segmentIndex = Math.max(
+    0,
+    plan.segments.findLastIndex((segment) => nowUs >= segment.start_us),
+  );
+  const segment = plan.segments[segmentIndex] ?? plan.segments[0];
+  if (!segment) return null;
+  const asset = assets.get(segment.asset_id);
+  if (!asset?.url) return null;
+
+  const transitionProgress = segmentIndex > 0 && segment.transition_us > 0
+    ? Math.max(0, Math.min(1, (nowUs - segment.start_us) / segment.transition_us))
+    : 1;
+  const previousSegment = transitionProgress < 1 ? plan.segments[segmentIndex - 1] : null;
+  const previousAsset = previousSegment ? assets.get(previousSegment.asset_id) : null;
+  const segmentProgress = Math.max(
+    0,
+    Math.min(1, (nowUs - segment.start_us) / Math.max(1, segment.end_us - segment.start_us)),
+  );
+
+  return (
+    <div className="background-preview" aria-label={`Nền tự động cảnh ${segmentIndex + 1} trên ${plan.segments.length}`}>
+      {previousSegment && previousAsset?.url && (
+        <BackgroundSceneMedia
+          asset={previousAsset}
+          localUs={Math.max(0, nowUs - previousSegment.start_us)}
+          opacity={1 - transitionProgress}
+          playing={playing}
+          progress={1}
+        />
+      )}
+      <BackgroundSceneMedia
+        asset={asset}
+        localUs={Math.max(0, nowUs - segment.start_us)}
+        opacity={transitionProgress}
+        playing={playing}
+        progress={segmentProgress}
+      />
+      <span className="background-scene-status">SCENE {String(segmentIndex + 1).padStart(2, '0')} / {String(plan.segments.length).padStart(2, '0')} · {segment.anchor === 'lyric_gap' ? 'LYRIC GAP' : 'BALANCED'}</span>
+    </div>
+  );
+}
+
+function BackgroundSceneMedia({
+  asset,
+  localUs,
+  opacity,
+  playing,
+  progress,
+}: {
+  asset: BackgroundAssetV1;
+  localUs: number;
+  opacity: number;
+  playing: boolean;
+  progress: number;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const source = assetUrl(asset.url ?? '');
+  const syncVideo = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const sourceDurationUs = asset.source_duration_us ?? 0;
+    const desiredUs = sourceDurationUs > 0 ? localUs % sourceDurationUs : localUs;
+    const desiredSeconds = desiredUs / 1_000_000;
+    if (Number.isFinite(video.duration) && Math.abs(video.currentTime - desiredSeconds) > 0.22) {
+      video.currentTime = Math.min(desiredSeconds, Math.max(0, video.duration - 0.01));
+    }
+    if (playing) void video.play().catch(() => undefined);
+    else video.pause();
+  }, [asset.source_duration_us, localUs, playing]);
+
+  useEffect(syncVideo, [syncVideo]);
+  const style = {
+    opacity,
+    '--background-zoom': String(1 + progress * 0.035),
+  } as CSSProperties;
+  if (asset.kind === 'image') {
+    // The source is a local project file selected at runtime; next/image cannot predeclare it.
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img className="background-scene-media" src={source} alt="" style={style} />;
+  }
+  return (
+    <video
+      className="background-scene-media"
+      ref={videoRef}
+      src={source}
+      muted
+      loop
+      playsInline
+      preload="metadata"
+      style={style}
+      onLoadedMetadata={syncVideo}
+    />
+  );
+}
+
 function KaraokeOverlay({
   timeline,
   nowUs,
@@ -1220,11 +1395,15 @@ function KaraokeOverlay({
     if (upcoming >= 0 && timeline.lines[upcoming].start_us - nowUs < 4_500_000) rows.push({ line: timeline.lines[upcoming], active: false, lane: upcoming % 2 });
   }
   const selectedFont = karaokeFontId(timeline.metadata);
+  const selectedColor = karaokeColorId(timeline.metadata);
   return (
     <div
       className="karaoke-overlay"
       aria-label="Xem trước chuyển động Karaoke"
-      style={{ fontFamily: `'${karaokeFontFamily(selectedFont)}', sans-serif` }}
+      style={{
+        fontFamily: `'${karaokeFontFamily(selectedFont)}', sans-serif`,
+        '--karaoke-highlight': karaokeColorHex(selectedColor),
+      } as CSSProperties}
     >
       {rows.map(({ line, active: isActive, lane }) => (
         <div
@@ -1324,6 +1503,41 @@ function KaraokeFontPicker({
         ))}
       </div>
       <p>Chiều cao luôn cố định; câu dài chỉ được nén ngang để hai dòng không nhảy cỡ chữ.</p>
+    </fieldset>
+  );
+}
+
+function KaraokeColorPicker({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: KaraokeColorId;
+  onChange: (colorId: KaraokeColorId) => void;
+  compact?: boolean;
+}) {
+  return (
+    <fieldset className={`karaoke-color-picker ${compact ? 'compact' : ''}`}>
+      <legend>{compact ? 'MÀU CHỮ CHẠY' : 'Màu chữ chuyển động'}</legend>
+      <div>
+        {KARAOKE_COLORS.map((color) => (
+          <button
+            className={value === color.id ? 'selected' : ''}
+            key={color.id}
+            type="button"
+            onClick={() => onChange(color.id)}
+            aria-label={`Chọn màu Karaoke ${color.label}`}
+            aria-pressed={value === color.id}
+            title={color.hint}
+            style={{ '--choice-color': color.hex } as CSSProperties}
+          >
+            <i style={{ background: color.hex }} />
+            <span>{color.label}</span>
+            {!compact && <small>{color.hint}</small>}
+          </button>
+        ))}
+      </div>
+      {!compact && <p>Màu đã chọn sẽ quét mượt theo giọng hát trong Preview và video xuất.</p>}
     </fieldset>
   );
 }

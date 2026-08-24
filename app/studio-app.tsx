@@ -16,6 +16,7 @@ import {
 } from 'react';
 
 import { API_BASE, ApiError, api, assetUrl } from './lib/api';
+import { legacyBackgroundPlan } from './lib/backgrounds';
 import { JobMonitor } from './lib/job-monitor';
 import {
   KARAOKE_COLORS,
@@ -141,7 +142,9 @@ export default function StudioApp() {
       try {
         backgroundPlan = await api<BackgroundPlanV1>(`/api/projects/${projectId}/background-plan`);
       } catch {
-        // Old projects can still open if their custom background file is unavailable.
+        // Keep the user's selected replacement visible while an older local API
+        // is still running. Never silently fall back to the source video's image.
+        backgroundPlan = legacyBackgroundPlan(project);
       }
     }
     setWorkspace({

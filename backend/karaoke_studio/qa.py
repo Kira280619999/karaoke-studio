@@ -9,6 +9,7 @@ from pathlib import Path
 from .media import probe, run, sha256_file
 from .models import ProjectRecord, ProjectState, TimelineV1
 from .motion import line_progress_ppm
+from .quicktime import read_full_frame_rate_playback_intent
 from .settings import Settings
 from .styles import normalize_karaoke_color_id
 from .timeline import validate_timeline
@@ -22,6 +23,8 @@ def high_frame_rate_packet_qa(
 ) -> dict[str, bool | int | str | None]:
     """Prove an explicit CFR packet clock without decode-time reordering."""
     required = output_info.fps_float > 60.0
+    quicktime_intent_required = output_info.fps_float >= 85.0
+    quicktime_intent = read_full_frame_rate_playback_intent(output)
     output_fps = Fraction(output_info.fps)
     expected_frames = math.ceil(
         timeline.duration_us
@@ -42,6 +45,8 @@ def high_frame_rate_packet_qa(
         "packet_count": output_info.video_frames,
         "constant_frame_rate": not output_info.variable_frame_rate,
         "no_b_frame_reordering": output_info.video_has_b_frames == 0,
+        "quicktime_realtime_intent_required": quicktime_intent_required,
+        "quicktime_realtime_intent_uint8": quicktime_intent,
         "pts_equals_dts": None,
         "monotonic_pts": None,
         "monotonic_dts": None,
@@ -101,6 +106,7 @@ def high_frame_rate_packet_qa(
             report["monotonic_dts"],
             report["constant_packet_duration"],
             report["starts_at_zero"],
+            not quicktime_intent_required or quicktime_intent == 1,
             bool(durations)
             and expected_packet_duration_ticks is not None
             and durations[0] == expected_packet_duration_ticks,

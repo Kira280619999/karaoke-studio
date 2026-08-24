@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from .backgrounds import BackgroundPlanV1, refresh_background_plan
 from .models import LineTiming, ProjectRecord, ProjectState, TimelineV1
 from .motion import line_progress_ppm, load_font, resolve_font
+from .quicktime import inject_full_frame_rate_playback_intent
 from .separation import load_candidates
 from .settings import Settings
 from .styles import karaoke_color_rgba
@@ -670,9 +671,12 @@ def render_video(
     export_kind = mode
     if mode == "final" and project.state not in {ProjectState.VERIFIED, ProjectState.RENDERED}:
         export_kind = "unverified-final"
+    compatibility_contract = (
+        "-hfr-realtime-v1" if preset == RenderPreset(1920, 1080, 120, 1) else ""
+    )
     output = export_dir / (
         f"{_slug(project.title)}-karaoke-{export_kind}-"
-        f"r{timeline.revision:05d}-{preset_name}.mp4"
+        f"r{timeline.revision:05d}{compatibility_contract}-{preset_name}.mp4"
     )
     log_path = project_dir / "logs" / f"render-{mode}-{preset_name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -777,6 +781,8 @@ def render_video(
     if code:
         tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
         raise RuntimeError(f"FFmpeg render thất bại.\n{tail}")
+    if preset == RenderPreset(1920, 1080, 120, 1):
+        inject_full_frame_rate_playback_intent(output)
     event(0.86, "Render hoàn tất; đang chạy full decode và QA…")
     return output
 

@@ -10,11 +10,16 @@ import {
 test('only rendered MP4 artifacts appear in the export action list', () => {
   const artifacts = videoExportArtifacts([
     { id: 'exports/final.mp4', label: 'final.mp4', kind: 'export', url: '/final', bytes: 12 },
+    { id: 'exports/legacy.mp4', label: 'song-r00002-1080p120.mp4', kind: 'export', url: '/legacy', bytes: 11 },
+    { id: 'exports/hfr.mp4', label: 'song-r00002-hfr-realtime-v1-1080p120.mp4', kind: 'export', url: '/hfr', bytes: 13 },
     { id: 'exports/qa.json', label: 'qa.json', kind: 'export', url: '/qa', bytes: 8 },
     { id: 'work/proxy.mp4', label: 'proxy.mp4', kind: 'proxy', url: '/proxy', bytes: 6 },
   ]);
 
-  assert.deepEqual(artifacts.map((artifact) => artifact.label), ['final.mp4']);
+  assert.deepEqual(artifacts.map((artifact) => artifact.label), [
+    'final.mp4',
+    'song-r00002-hfr-realtime-v1-1080p120.mp4',
+  ]);
 });
 
 test('download and delete paths preserve Vietnamese filenames safely', () => {

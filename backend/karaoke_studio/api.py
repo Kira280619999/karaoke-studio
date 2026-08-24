@@ -46,6 +46,7 @@ from .models import (
     TimingSuggestionResponse,
 )
 from .motion import remap_timeline_sweep_font, resolve_font
+from .quicktime import is_legacy_quicktime_hfr_export
 from .rendering import render_preview_png
 from .separation import load_candidates
 from .settings import Settings
@@ -484,6 +485,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     ".jpg",
                     ".png",
                 }:
+                    if kind == "export" and is_legacy_quicktime_hfr_export(path.name):
+                        continue
                     relative = path.relative_to(project_dir).as_posix()
                     result.append(
                         Artifact(

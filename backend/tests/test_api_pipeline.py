@@ -190,9 +190,16 @@ def test_export_download_and_scoped_delete(
     payload = b"local-export-fixture"
     export_path = export_dir / filename
     export_path.write_bytes(payload)
+    legacy_hfr = export_dir / "ân-điển-r00001-1080p120.mp4"
+    compatible_hfr = export_dir / "ân-điển-r00001-hfr-realtime-v1-1080p120.mp4"
+    legacy_hfr.write_bytes(b"legacy-quicktime-hfr")
+    compatible_hfr.write_bytes(b"compatible-quicktime-hfr")
 
     artifacts = client.get(f"/api/projects/{project_id}/artifacts")
     assert artifacts.status_code == 200
+    artifact_labels = {item["label"] for item in artifacts.json()}
+    assert legacy_hfr.name not in artifact_labels
+    assert compatible_hfr.name in artifact_labels
     artifact = next(item for item in artifacts.json() if item["label"] == filename)
     assert artifact["kind"] == "export"
     assert artifact["bytes"] == len(payload)
@@ -420,11 +427,16 @@ def test_synthetic_process_render_and_qa(
     assert draft_report["status"] == "PASS"
     assert draft_report["output_fps"] == 120.0
     assert draft_report["output_fps_ratio"] == "120/1"
-    assert f"-r{render_revision:05d}-1080p120.mp4" in draft_report["output"]
+    assert (
+        f"-r{render_revision:05d}-hfr-realtime-v1-1080p120.mp4"
+        in draft_report["output"]
+    )
     assert draft_report["playback_timing"]["status"] == "PASS"
     assert draft_report["playback_timing"]["packet_count"] == 480
     assert draft_report["playback_timing"]["pts_equals_dts"] is True
     assert draft_report["playback_timing"]["packet_duration_ticks"] == 1000
     assert draft_report["playback_timing"]["expected_packet_duration_ticks"] == 1000
     assert draft_report["playback_timing"]["starts_at_zero"] is True
+    assert draft_report["playback_timing"]["quicktime_realtime_intent_required"] is True
+    assert draft_report["playback_timing"]["quicktime_realtime_intent_uint8"] == 1
     assert draft_report["karaoke_color"] == "red"

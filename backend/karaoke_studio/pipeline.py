@@ -371,7 +371,7 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         store.project_dir(project_id),
         settings,
         mode,
-        options.get("preset", "1080p120"),
+        options.get("preset", "1080p60"),
         bool(options.get("countdown", True)),
         context.emit,
     )

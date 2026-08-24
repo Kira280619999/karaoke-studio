@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from karaoke_studio.lrc import parse_lrc
-from karaoke_studio.models import SweepCurveV1, SweepPointV1
+from karaoke_studio.models import RenderRequest, SweepCurveV1, SweepPointV1
 from karaoke_studio.motion import line_progress_ppm
 from karaoke_studio.rendering import (
     SONG_CREDIT_ACCENT,
@@ -197,6 +197,10 @@ def test_1080p120_preset_is_native_120fps() -> None:
     preset = resolve_preset("1080p120", record)
 
     assert preset == RenderPreset(1920, 1080, 120, 1)
+
+
+def test_1080p60_is_the_compatible_api_default() -> None:
+    assert RenderRequest().preset == "1080p60"
 
 
 def test_renderer_uses_timeline_font_and_keeps_wrapped_rows_the_same_size(test_settings) -> None:

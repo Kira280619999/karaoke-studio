@@ -35,6 +35,12 @@ import {
   videoExportArtifacts,
 } from './lib/export-artifacts';
 import {
+  DEFAULT_EXPORT_PRESET,
+  EXPORT_PRESET_OPTIONS,
+  exportPresetLabel,
+  type ExportPreset,
+} from './lib/export-presets';
+import {
   KARAOKE_COLORS,
   karaokeColorHex,
   karaokeColorId,
@@ -680,7 +686,7 @@ function CreateProject({
             : 'Tách giọng, căn từng âm tiết và đưa mọi timing chưa chắc chắn vào hàng kiểm duyệt trước khi xuất Final.'}
         </p>
         <div className="default-spec">
-          <span>{importMode === 'batch' ? 'BATCH' : 'OUTPUT'}</span><strong>{importMode === 'batch' ? '2 bài xử lý song song' : '1080p · 120fps'}</strong>
+          <span>{importMode === 'batch' ? 'BATCH' : 'OUTPUT'}</span><strong>{importMode === 'batch' ? '2 bài xử lý song song' : '1080p · 60fps tương thích'}</strong>
           <small>{importMode === 'batch' ? 'Các bài còn lại tự xếp hàng · giữ video gốc' : 'Hai dòng cố định · quét liên tục · AAC 48 kHz'}</small>
         </div>
       </div>
@@ -935,7 +941,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const [currentTimeUs, setCurrentTimeUs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewerVolume, setViewerVolume] = useState(1);
-  const [preset, setPreset] = useState<'1080p120' | '1080p60' | '1080p30' | 'source'>('1080p120');
+  const [preset, setPreset] = useState<ExportPreset>(DEFAULT_EXPORT_PRESET);
   const [inspectorTab, setInspectorTab] = useState<'review' | 'audio' | 'text' | 'export'>('review');
   const [saving, setSaving] = useState(false);
   const [autosaveError, setAutosaveError] = useState<string | null>(null);
@@ -1563,14 +1569,15 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                   <div><span>Chuyển động</span><strong>Quét màu theo giọng hát</strong></div>
                   <div><span>Kiểu chữ</span><strong>Viền trắng · bóng xanh</strong></div>
                   <div><span>Màu active</span><strong><i className="karaoke-color-swatch" style={{ background: karaokeColorHex(karaokeColorId(timeline.metadata)) }} /> {karaokeColorLabel(karaokeColorId(timeline.metadata))}</strong></div>
-                  <div><span>Xuất hình</span><strong>Native 120 fps</strong></div>
+                  <div><span>Xuất hình</span><strong>{exportPresetLabel(preset)}</strong></div>
                 </div>
               </section>
             )}
             {inspectorTab === 'export' && (
               <section className="export-panel">
                 <div><span className="section-kicker">SHARE / XUẤT VIDEO</span><h2>Xuất video bất cứ lúc nào</h2><p>Điểm cần duyệt chỉ là cảnh báo, không khóa xuất. QA vẫn ghi rõ trạng thái kiểm chứng trong báo cáo.</p></div>
-                <label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as typeof preset)}><option value="1080p120">1080p · 120fps (siêu mượt)</option><option value="1080p60">1080p · 60fps</option><option value="1080p30">1080p · 30fps</option><option value="source">Theo video gốc</option></select></label>
+                <label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as ExportPreset)}>{EXPORT_PRESET_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
+                {preset === '1080p120' && <p className="export-preset-warning">120fps có thể phát chậm trên player không hỗ trợ. Hãy dùng 1080p60 để tương thích rộng.</p>}
                 <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ</button><button className="final-button" title={data.project.selected_instrumental ? 'QA không khóa thao tác xuất' : 'Chưa có instrumental để loại giọng'} disabled={!data.project.selected_instrumental || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Final đã loại giọng' : 'Xuất Karaoke loại giọng'}</button></div>
                 <button className="verification-gate" disabled={dirty || saving || data.project.state === 'VERIFIED' || data.project.state === 'RENDERED'} type="button" onClick={markVerified}><span>{data.project.instrumental_confirmed ? '✓' : '○'} Instrumental</span><span>{lowConfidence === 0 ? '✓' : '○'} {lowConfidence ? `${lowConfidence} điểm nên kiểm tra` : 'Timing AI đã đạt'}</span><strong>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'ĐÃ VERIFIED' : 'VERIFIED là tùy chọn · không khóa xuất'}</strong></button>
                 <ExportList

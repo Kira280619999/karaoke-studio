@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   description: 'Biến MP4 và timeline LRC/SRT/VTT thành video Karaoke local được tách giọng, căn lời và kiểm chứng theo từng frame.',
   openGraph: {
     title: 'Karaoke Studio',
-    description: 'MP4 + LRC/SRT/VTT → Karaoke 1080p120 được kiểm chứng theo frame, xử lý hoàn toàn trên máy.',
+    description: 'MP4 + LRC/SRT/VTT → Karaoke 1080p60/120 được kiểm chứng theo frame, xử lý hoàn toàn trên máy.',
     images: [{ url: '/og.png', width: 1200, height: 630, alt: 'Karaoke Studio — Frame-Verified Karaoke' }],
     locale: 'vi_VN',
     type: 'website',

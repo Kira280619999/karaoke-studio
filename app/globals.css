@@ -605,6 +605,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .candidate-card button { width: 100%; margin-top: 7px; }
 .candidate-card button.confirmed { border-color: rgba(106,215,154,.35); color: var(--green); }
 .export-panel select { margin-bottom: 9px; font-size: 9px; }
+.export-preset-warning { margin: -3px 0 9px; padding: 7px 9px; border-left: 2px solid var(--gold); color: var(--gold-soft); background: rgba(242,184,75,.06); font-size: 8px; line-height: 1.45; }
 .export-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .export-actions button { min-height: 38px; }
 .final-button { color: #171208 !important; background: var(--gold) !important; }

@@ -2740,77 +2740,85 @@ function SongTimelineRoll({
       aria-label={expanded ? 'Timeline Karaoke toàn màn hình' : undefined}
     >
       <div className="song-roll-header">
-        <div>
-          <span>MAGNETIC LYRIC TIMELINE</span>
-          <small>Kéo thân để dời · kéo hai mép trắng để rút/ngân từ · thả là tự lưu · Shift bắt theo frame</small>
-          <div className={`song-roll-autosave ${autosaveStatus}`} role="status" aria-live="polite" title={autosaveError ?? undefined}>
-            <i />
-            <strong>{autosaveStatus === 'error'
-              ? 'Tự lưu gặp lỗi'
-              : autosaveStatus === 'saving'
-              ? 'Đang tự lưu xuống backend…'
-              : autosaveStatus === 'pending'
-              ? 'Đã nhận thay đổi · sắp tự lưu…'
-              : `Đã tự lưu revision ${autosaveRevision} ✓`}</strong>
-            {autosaveStatus === 'error' && <button type="button" onClick={onRetryAutosave}>Thử lại</button>}
+        <div className="song-roll-heading-copy">
+          <div className="song-roll-title-row">
+            <span>MAGNETIC LYRIC TIMELINE</span>
+            <div className={`song-roll-autosave ${autosaveStatus}`} role="status" aria-live="polite" title={autosaveError ?? undefined}>
+              <i />
+              <strong>{autosaveStatus === 'error'
+                ? 'Lỗi tự lưu'
+                : autosaveStatus === 'saving'
+                ? 'Đang lưu…'
+                : autosaveStatus === 'pending'
+                ? 'Chờ lưu…'
+                : `Đã lưu · r${autosaveRevision} ✓`}</strong>
+              {autosaveStatus === 'error' && <button type="button" onClick={onRetryAutosave}>Thử lại</button>}
+            </div>
           </div>
+          <small>Kéo để dời · kéo mép để co giãn · Shift = bắt frame</small>
         </div>
         <div className="song-roll-controls">
-          <div className="song-roll-edit-actions" role="group" aria-label="Hoàn tác, khóa và duyệt câu đang chọn">
-            <button disabled={!canUndo} type="button" onClick={onUndo}>↶ Undo</button>
-            <button disabled={!canRedo} type="button" onClick={onRedo}>↷ Redo</button>
-            <button className={lineLocked ? 'active' : ''} type="button" onClick={onToggleLock}>{lineLocked ? 'Mở khóa câu' : 'Khóa câu'}</button>
-            <button className={`approve ${lineVerified ? 'active' : ''}`} type="button" onClick={onVerifyLine}>{lineVerified ? 'Đã duyệt ✓' : 'Duyệt câu'}</button>
+          <div className="song-roll-control-row primary">
+            <div className="song-roll-edit-actions" role="group" aria-label="Hoàn tác, khóa và duyệt câu đang chọn">
+              <button disabled={!canUndo} type="button" onClick={onUndo}>↶ Undo</button>
+              <button disabled={!canRedo} type="button" onClick={onRedo}>↷ Redo</button>
+              <button className={lineLocked ? 'active' : ''} type="button" onClick={onToggleLock}>{lineLocked ? 'Mở khóa' : 'Khóa câu'}</button>
+              <button className={`approve ${lineVerified ? 'active' : ''}`} type="button" onClick={onVerifyLine}>{lineVerified ? 'Đã duyệt ✓' : 'Duyệt câu'}</button>
+            </div>
+            <div className="song-roll-copy-actions" role="group" aria-label="Sao chép, dán và xoá nguyên câu cùng nhịp">
+              <button
+                className={copiedLine?.id === structureLine?.id ? 'active' : ''}
+                disabled={!structureLine}
+                type="button"
+                title="Copy nguyên lời, độ dài từng từ và đường quét"
+                onClick={copySelectedLine}
+              >{copiedLine?.id === structureLine?.id ? '✓ Đã copy câu + nhịp' : '⧉ Copy câu + nhịp'}</button>
+              <button
+                className="paste"
+                disabled={!copiedLine}
+                type="button"
+                title={copiedLine ? `Dán “${copiedLine.text}” bắt đầu đúng tại frame đầu phát` : 'Hãy copy một câu trước'}
+                onClick={pasteCopiedLine}
+              >＋ Dán ở đầu phát</button>
+              <button
+                className="danger"
+                disabled={!structureLine || structureLocked || timeline.lines.length === 1}
+                type="button"
+                title="Xoá câu đang chọn; có thể Undo"
+                onClick={() => applyStructureAction('delete-line')}
+              >Xoá câu ↶</button>
+            </div>
           </div>
-          <div className="song-roll-copy-actions" role="group" aria-label="Sao chép, dán và xoá nguyên câu cùng nhịp">
+          <div className="song-roll-control-row secondary">
             <button
-              className={copiedLine?.id === structureLine?.id ? 'active' : ''}
-              disabled={!structureLine}
+              className="song-roll-expand"
               type="button"
-              title="Copy nguyên lời, độ dài từng từ và đường quét"
-              onClick={copySelectedLine}
-            >{copiedLine?.id === structureLine?.id ? '✓ Đã copy câu + nhịp' : '⧉ Copy câu + nhịp'}</button>
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? '↙ Thu nhỏ · Esc' : '⛶ Mở rộng'}
+            </button>
             <button
-              className="paste"
-              disabled={!copiedLine}
+              className={`song-roll-details-toggle ${showDetails ? 'active' : ''}`}
               type="button"
-              title={copiedLine ? `Dán “${copiedLine.text}” bắt đầu đúng tại frame đầu phát` : 'Hãy copy một câu trước'}
-              onClick={pasteCopiedLine}
-            >＋ Dán tại đầu phát</button>
-            <button
-              className="danger"
-              disabled={!structureLine || structureLocked || timeline.lines.length === 1}
-              type="button"
-              title="Xoá câu đang chọn; có thể Undo"
-              onClick={() => applyStructureAction('delete-line')}
-            >Xoá câu ↶</button>
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails((current) => !current)}
+            >
+              ◫ Chi tiết
+            </button>
+            <div className="song-roll-drag-mode" role="group" aria-label="Chọn kiểu kéo timing">
+              <button className={dragMode === 'token' ? 'active' : ''} type="button" onClick={() => setDragMode('token')}>Kéo từ</button>
+              <button className={dragMode === 'line' ? 'active' : ''} type="button" onClick={() => setDragMode('line')}>Kéo câu</button>
+            </div>
+            <button className="song-roll-add-marker" type="button" onClick={addMarker}>＋ Mốc {formatTime(nowUs)}</button>
+            <div className="song-roll-zoom-actions" role="group" aria-label="Thu phóng và theo dõi Timeline">
+              <button disabled={zoomIndex === 0} type="button" onClick={() => changeZoom(zoomIndex - 1)}>−</button>
+              <b>{fitPixelsPerSecond === null ? `${pixelsPerSecond} px/s` : 'FIT'}</b>
+              <button disabled={zoomIndex === SONG_ROLL_ZOOM.length - 1} type="button" onClick={() => changeZoom(zoomIndex + 1)}>+</button>
+              <button className={fitPixelsPerSecond !== null ? 'active' : ''} title="Vừa toàn bài · Shift+Z" type="button" onClick={fitTimeline}>⇥ Fit</button>
+              <button className={followPlayhead ? 'following' : ''} type="button" onClick={() => setFollowPlayhead((current) => !current)}>{followPlayhead ? '◎ Bám đầu phát' : '↔ Cuộn tự do'}</button>
+            </div>
           </div>
-          <button
-            className="song-roll-expand"
-            type="button"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((current) => !current)}
-          >
-            {expanded ? '↙ Thu nhỏ · Esc' : '⛶ Phóng lớn'}
-          </button>
-          <button
-            className={`song-roll-details-toggle ${showDetails ? 'active' : ''}`}
-            type="button"
-            aria-expanded={showDetails}
-            onClick={() => setShowDetails((current) => !current)}
-          >
-            ◫ Chi tiết câu
-          </button>
-          <div className="song-roll-drag-mode" role="group" aria-label="Chọn kiểu kéo timing">
-            <button className={dragMode === 'token' ? 'active' : ''} type="button" onClick={() => setDragMode('token')}>Kéo từ</button>
-            <button className={dragMode === 'line' ? 'active' : ''} type="button" onClick={() => setDragMode('line')}>Kéo câu</button>
-          </div>
-          <button className="song-roll-add-marker" type="button" onClick={addMarker}>＋ Đánh dấu {formatTime(nowUs)}</button>
-          <button disabled={zoomIndex === 0} type="button" onClick={() => changeZoom(zoomIndex - 1)}>−</button>
-          <b>{fitPixelsPerSecond === null ? `${pixelsPerSecond} px/s` : 'FIT'}</b>
-          <button disabled={zoomIndex === SONG_ROLL_ZOOM.length - 1} type="button" onClick={() => changeZoom(zoomIndex + 1)}>+</button>
-          <button className={fitPixelsPerSecond !== null ? 'active' : ''} title="Vừa toàn bài · Shift+Z" type="button" onClick={fitTimeline}>⇥ Fit</button>
-          <button className={followPlayhead ? 'following' : ''} type="button" onClick={() => setFollowPlayhead((current) => !current)}>{followPlayhead ? '◎ Theo đầu phát' : '↔ Đang cuộn tự do'}</button>
         </div>
       </div>
       <div className="song-roll-editor-stage">

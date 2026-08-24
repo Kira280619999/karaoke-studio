@@ -68,11 +68,23 @@ def _windows_process_tree_round_trip(temporary: Path) -> None:
     descendant_pid: int | None = None
     try:
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not pid_path.is_file() and root.poll() is None:
+        while time.monotonic() < deadline and root.poll() is None:
+            try:
+                published_pid = pid_path.read_text(encoding="ascii").strip()
+            except FileNotFoundError:
+                published_pid = ""
+            if published_pid:
+                try:
+                    descendant_pid = int(published_pid)
+                except ValueError:
+                    # The child writes through a normal text file. On Windows the
+                    # reader can observe it between creation and the completed write.
+                    descendant_pid = None
+                else:
+                    break
             time.sleep(0.05)
-        if not pid_path.is_file():
+        if descendant_pid is None:
             raise RuntimeError("Windows process-tree fixture did not publish its child PID.")
-        descendant_pid = int(pid_path.read_text(encoding="ascii"))
         if not _windows_pid_alive(root.pid) or not _windows_pid_alive(descendant_pid):
             raise RuntimeError("Windows process-tree fixture exited before cancellation.")
 

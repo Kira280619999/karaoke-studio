@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 
 from .media import probe, run, sha256_file
 from .models import ProjectRecord, ProjectState, TimelineV1
 from .motion import line_progress_ppm
 from .settings import Settings
+from .styles import normalize_karaoke_color_id
 from .timeline import validate_timeline
 
 
@@ -32,7 +34,14 @@ def run_final_qa(
         if output_info.audio_duration_us is not None
         else None
     )
-    motion_report = motion_qa(timeline)
+    qa_timeline = timeline.model_copy(deep=True)
+    try:
+        output_fps = Fraction(output_info.fps)
+        qa_timeline.fps_numerator = output_fps.numerator
+        qa_timeline.fps_denominator = output_fps.denominator
+    except (ValueError, ZeroDivisionError):
+        pass
+    motion_report = motion_qa(qa_timeline)
     run([settings.ffmpeg, "-v", "error", "-i", str(output), "-f", "null", "-"])
     qa_dir = project_dir / "qa" / output.stem
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -98,6 +107,12 @@ def run_final_qa(
         "expected_duration_us": timeline.duration_us,
         "duration_delta_us": duration_delta_us,
         "frame_tolerance_us": frame_us,
+        "output_fps": output_info.fps_float,
+        "output_fps_ratio": output_info.fps,
+        "timeline_revision": timeline.revision,
+        "karaoke_color": normalize_karaoke_color_id(
+            str(timeline.metadata.get("karaoke_color", ""))
+        ),
         "audio_duration_us": output_info.audio_duration_us,
         "av_duration_delta_us": av_duration_delta_us,
         "timeline_issues": [issue.model_dump(mode="json") for issue in timeline_issues],

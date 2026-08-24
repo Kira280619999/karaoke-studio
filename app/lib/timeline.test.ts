@@ -7,6 +7,7 @@ import {
   deleteTimelineLine,
   deleteTimelineToken,
   editTimelineTokenText,
+  evaluateDisplaySweepPpm,
   evaluateSweepPpm,
   highlightPercent,
   insertTimelineLine,
@@ -539,6 +540,31 @@ test('non-linear sweep follows acoustic control points with integer interpolatio
     .map((timeUs) => evaluateSweepPpm(curve, timeUs));
   assert.deepEqual(samples, [0, 130_000, 260_000, 570_000, 880_000, 1_000_000]);
   assert.deepEqual(samples, [...samples].sort((a, b) => a - b));
+});
+
+test('display sweep damps internal velocity changes but preserves exact endpoints', () => {
+  const curve = {
+    schema_version: '1.0' as const,
+    source: 'ensemble_ctc' as const,
+    confidence: 0.96,
+    verified: true,
+    points: [
+      { time_us: 1_000_000, line_progress_ppm: 0 },
+      { time_us: 1_100_000, line_progress_ppm: 400_000 },
+      { time_us: 2_900_000, line_progress_ppm: 600_000 },
+      { time_us: 3_000_000, line_progress_ppm: 1_000_000 },
+    ],
+  };
+  const display = [1_000_000, 1_100_000, 2_000_000, 2_900_000, 3_000_000]
+    .map((timeUs) => evaluateDisplaySweepPpm(curve, timeUs));
+  const acoustic = [1_000_000, 1_100_000, 2_000_000, 2_900_000, 3_000_000]
+    .map((timeUs) => evaluateSweepPpm(curve, timeUs));
+
+  assert.equal(display[0], acoustic[0]);
+  assert.equal(display.at(-1), acoustic.at(-1));
+  assert.ok(display[1] < acoustic[1]);
+  assert.ok(display[3] > acoustic[3]);
+  assert.deepEqual(display, [...display].sort((a, b) => a - b));
 });
 
 test('manual boundary edit rescales curve and invalidates motion verification', () => {

@@ -443,6 +443,15 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/renders")
     def start_render(project_id: str, request: RenderRequest) -> dict:
         project = _require_project(store, project_id)
+        timeline = store.load_timeline(project_id)
+        if (
+            request.expected_timeline_revision is not None
+            and request.expected_timeline_revision != timeline.revision
+        ):
+            raise HTTPException(
+                409,
+                "Timeline vừa thay đổi. Hãy chờ tự lưu hoàn tất rồi xuất lại.",
+            )
         if request.mode == "final" and not project.selected_instrumental:
             raise HTTPException(409, "Chưa có instrumental để xuất bản loại giọng.")
         try:

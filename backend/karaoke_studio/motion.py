@@ -214,6 +214,27 @@ def evaluate_sweep_ppm(curve: SweepCurveV1, now_us: int) -> int:
     return first.line_progress_ppm + round(elapsed * delta / duration)
 
 
+def evaluate_display_sweep_ppm(curve: SweepCurveV1, now_us: int) -> int:
+    """Damp internal CTC velocity jumps without moving token boundaries."""
+    points = curve.points
+    if len(points) <= 2:
+        return evaluate_sweep_ppm(curve, now_us)
+    first = points[0]
+    last = points[-1]
+    if now_us <= first.time_us:
+        return first.line_progress_ppm
+    if now_us >= last.time_us:
+        return last.line_progress_ppm
+    duration = max(1, last.time_us - first.time_us)
+    linear = first.line_progress_ppm + round(
+        (now_us - first.time_us)
+        * (last.line_progress_ppm - first.line_progress_ppm)
+        / duration
+    )
+    acoustic = evaluate_sweep_ppm(curve, now_us)
+    return round((acoustic + linear * 3) / 4)
+
+
 def line_progress_ppm(line: LineTiming, now_us: int) -> int | None:
     if now_us <= line.start_us:
         return 0
@@ -224,7 +245,11 @@ def line_progress_ppm(line: LineTiming, now_us: int) -> int | None:
         if now_us < token.start_us:
             return previous_progress
         if now_us <= token.end_us:
-            return evaluate_sweep_ppm(token.sweep, now_us) if token.sweep is not None else None
+            return (
+                evaluate_display_sweep_ppm(token.sweep, now_us)
+                if token.sweep is not None
+                else None
+            )
         if token.sweep is not None:
             previous_progress = token.sweep.points[-1].line_progress_ppm
     return PPM

@@ -480,7 +480,7 @@ export function highlightPercent(line: LineTiming, nowUs: number): number {
   const curve = line.tokens.find(
     (token) => token.sweep && token.start_us <= nowUs && nowUs <= token.end_us,
   )?.sweep;
-  if (curve) return evaluateSweepPpm(curve, nowUs) / 10_000;
+  if (curve) return evaluateDisplaySweepPpm(curve, nowUs) / 10_000;
   const total = Math.max(1, line.text.length);
   let cursor = 0;
   for (let index = 0; index < line.tokens.length; index += 1) {
@@ -513,6 +513,27 @@ export function evaluateSweepPpm(curve: SweepCurveV1, nowUs: number): number {
   const duration = Math.max(1, second.time_us - first.time_us);
   return first.line_progress_ppm
     + Math.round((elapsed * (second.line_progress_ppm - first.line_progress_ppm)) / duration);
+}
+
+/**
+ * Preserve every acoustic token boundary while damping abrupt velocity changes
+ * between internal CTC control points. A mostly-linear display path feels like
+ * a hardware Karaoke sweep; the acoustic path still contributes subtle vowel
+ * and consonant timing without creating visible stalls.
+ */
+export function evaluateDisplaySweepPpm(curve: SweepCurveV1, nowUs: number): number {
+  const points = curve.points;
+  if (points.length <= 2) return evaluateSweepPpm(curve, nowUs);
+  const first = points[0];
+  const last = points.at(-1)!;
+  if (nowUs <= first.time_us) return first.line_progress_ppm;
+  if (nowUs >= last.time_us) return last.line_progress_ppm;
+  const linear = first.line_progress_ppm + Math.round(
+    ((nowUs - first.time_us) * (last.line_progress_ppm - first.line_progress_ppm))
+      / Math.max(1, last.time_us - first.time_us),
+  );
+  const acoustic = evaluateSweepPpm(curve, nowUs);
+  return Math.round((acoustic + linear * 3) / 4);
 }
 
 export function tokenDisplaySegments(line: LineTiming): TokenDisplaySegment[] {

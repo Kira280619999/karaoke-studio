@@ -258,6 +258,30 @@ def test_synthetic_process_render_and_qa(
     assert early_api_render.status_code == 200, early_api_render.text
     assert early_api_render.json()["job"]["options"]["mode"] == "final"
 
+    current_revision = store.load_timeline(project_id).revision
+    stale_api_render = client.post(
+        f"/api/projects/{project_id}/renders",
+        json={
+            "mode": "draft",
+            "preset": "1080p120",
+            "expected_timeline_revision": current_revision - 1,
+        },
+    )
+    assert stale_api_render.status_code == 409
+    revision_bound_render = client.post(
+        f"/api/projects/{project_id}/renders",
+        json={
+            "mode": "draft",
+            "preset": "1080p120",
+            "expected_timeline_revision": current_revision,
+        },
+    )
+    assert revision_bound_render.status_code == 200, revision_bound_render.text
+    assert (
+        revision_bound_render.json()["job"]["options"]["expected_timeline_revision"]
+        == current_revision
+    )
+
     evidence_response = client.get(f"/api/projects/{project_id}/alignment-evidence")
     assert evidence_response.status_code == 200
     evidence = evidence_response.json()
@@ -326,7 +350,12 @@ def test_synthetic_process_render_and_qa(
         message="test",
         created_at=now_iso(),
         updated_at=now_iso(),
-        options={"mode": "draft", "preset": "1080p30", "countdown": True},
+        options={
+            "mode": "draft",
+            "preset": "1080p120",
+            "countdown": True,
+            "expected_timeline_revision": store.load_timeline(project_id).revision,
+        },
     )
     store.add_job(render_job)
     render_project(render_job.id, project_id, render_job.options, test_settings)
@@ -338,3 +367,6 @@ def test_synthetic_process_render_and_qa(
     draft_report = next(report for report in report_payloads if report["mode"] == "draft")
     assert draft_report["audio_mode"] == "source_mix_with_vocal"
     assert draft_report["status"] == "PASS"
+    assert draft_report["output_fps"] == 120.0
+    assert draft_report["output_fps_ratio"] == "120/1"
+    assert draft_report["karaoke_color"] == "red"

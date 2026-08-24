@@ -54,6 +54,8 @@ class RenderPreset:
 
 
 def resolve_preset(name: str, project: ProjectRecord) -> RenderPreset:
+    if name == "1080p120":
+        return RenderPreset(1920, 1080, 120, 1)
     if name == "1080p30":
         return RenderPreset(1920, 1080, 30, 1)
     if name == "source":

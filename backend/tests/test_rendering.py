@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from karaoke_studio.lrc import parse_lrc
 from karaoke_studio.models import SweepCurveV1, SweepPointV1
-from karaoke_studio.motion import evaluate_sweep_ppm
+from karaoke_studio.motion import evaluate_display_sweep_ppm
 from karaoke_studio.rendering import (
     KaraokeRenderer,
     RenderPreset,
     karaoke_countdown_number,
+    resolve_preset,
 )
 
 
@@ -99,7 +102,7 @@ def test_each_fixed_lane_fits_its_own_text_without_wrapping(test_settings) -> No
     assert long_asset.scale_x < 1
 
 
-def test_renderer_uses_exact_same_integer_sweep_progress(test_settings) -> None:
+def test_renderer_uses_exact_same_smoothed_integer_sweep_progress(test_settings) -> None:
     timeline = parse_lrc("[00:01.00]Ngân", duration_us=3_000_000)
     token = timeline.lines[0].tokens[0]
     token.sweep = SweepCurveV1(
@@ -121,9 +124,17 @@ def test_renderer_uses_exact_same_integer_sweep_progress(test_settings) -> None:
     now_us = 1_700_000
     boundary = renderer._highlight_boundary(line, left, now_us)
     expected = left + asset.font.getlength(line.text) * asset.scale_x * (
-        evaluate_sweep_ppm(token.sweep, now_us) / 1_000_000
+        evaluate_display_sweep_ppm(token.sweep, now_us) / 1_000_000
     )
     assert abs(boundary - expected) < 1e-9
+
+
+def test_1080p120_preset_is_native_120fps() -> None:
+    record = SimpleNamespace(fps="30000/1001", width=1280, height=720)
+
+    preset = resolve_preset("1080p120", record)
+
+    assert preset == RenderPreset(1920, 1080, 120, 1)
 
 
 def test_renderer_uses_timeline_font_without_changing_fixed_size(test_settings) -> None:

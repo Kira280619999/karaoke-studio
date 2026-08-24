@@ -321,7 +321,11 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
 
 
 def _preserve_reviewed_timing(current: TimelineV1, rebuilt: TimelineV1) -> TimelineV1:
-    """Keep explicit human decisions while repairing an invalid media duration."""
+    """Keep user-owned style metadata and explicit timing decisions on rebuild."""
+    rebuilt.language = current.language
+    rebuilt.fps_numerator = current.fps_numerator
+    rebuilt.fps_denominator = current.fps_denominator
+    rebuilt.metadata = {**rebuilt.metadata, **current.metadata}
     current_by_key = {(line.id, line.text): line for line in current.lines}
     for index, fresh in enumerate(rebuilt.lines):
         previous = current_by_key.get((fresh.id, fresh.text))
@@ -355,6 +359,11 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
     if not project:
         raise KeyError(project_id)
     timeline = store.load_timeline(project_id)
+    expected_revision = options.get("expected_timeline_revision")
+    if expected_revision is not None and timeline.revision != expected_revision:
+        raise RuntimeError(
+            "Timeline đã thay đổi sau khi xếp hàng render; hãy xuất lại revision mới nhất."
+        )
     mode = options.get("mode", "draft")
     output = render_video(
         project,
@@ -362,7 +371,7 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         store.project_dir(project_id),
         settings,
         mode,
-        options.get("preset", "1080p60"),
+        options.get("preset", "1080p120"),
         bool(options.get("countdown", True)),
         context.emit,
     )

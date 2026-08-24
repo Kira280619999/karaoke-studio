@@ -5,10 +5,12 @@ from pathlib import Path
 from karaoke_studio.alignment import LYRIC_CTC_SPEC, SPEECH_CTC_SPEC
 from karaoke_studio.ensemble import AlignmentRun, _ensemble_token_sweep
 from karaoke_studio.lrc import parse_lrc
+from karaoke_studio.models import SweepCurveV1, SweepPointV1
 from karaoke_studio.motion import (
     GraphemeSpan,
     RhythmGrid,
     canonical_progress_ppm,
+    evaluate_display_sweep_ppm,
     evaluate_sweep_ppm,
     line_progress_ppm,
     linear_sweep,
@@ -83,6 +85,29 @@ def test_sung_vowel_owns_the_sustain_in_non_linear_curve(test_settings) -> None:
     )
     samples = [evaluate_sweep_ppm(curve, value) for value in range(1_000_000, 2_500_001, 16_667)]
     assert samples == sorted(samples)
+
+
+def test_display_sweep_damps_velocity_jumps_and_keeps_exact_endpoints() -> None:
+    curve = SweepCurveV1(
+        source="ensemble_ctc",
+        confidence=0.96,
+        verified=True,
+        points=[
+            SweepPointV1(time_us=1_000_000, line_progress_ppm=0),
+            SweepPointV1(time_us=1_100_000, line_progress_ppm=400_000),
+            SweepPointV1(time_us=2_900_000, line_progress_ppm=600_000),
+            SweepPointV1(time_us=3_000_000, line_progress_ppm=1_000_000),
+        ],
+    )
+    times = [1_000_000, 1_100_000, 2_900_000, 3_000_000]
+    display = [evaluate_display_sweep_ppm(curve, value) for value in times]
+    acoustic = [evaluate_sweep_ppm(curve, value) for value in times]
+
+    assert display[0] == acoustic[0]
+    assert display[-1] == acoustic[-1]
+    assert display[1] < acoustic[1]
+    assert display[-2] > acoustic[-2]
+    assert display == sorted(display)
 
 
 def test_linear_fallback_sweeps_spaces_and_punctuation_without_backward_motion(

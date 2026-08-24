@@ -24,6 +24,11 @@ import {
 } from './lib/backgrounds';
 import { JobMonitor } from './lib/job-monitor';
 import {
+  exportDeletePath,
+  exportDownloadPath,
+  videoExportArtifacts,
+} from './lib/export-artifacts';
+import {
   KARAOKE_COLORS,
   karaokeColorHex,
   karaokeColorId,
@@ -1295,7 +1300,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 <label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as typeof preset)}><option value="1080p120">1080p · 120fps (siêu mượt)</option><option value="1080p60">1080p · 60fps</option><option value="1080p30">1080p · 30fps</option><option value="source">Theo video gốc</option></select></label>
                 <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ</button><button className="final-button" title={data.project.selected_instrumental ? 'QA không khóa thao tác xuất' : 'Chưa có instrumental để loại giọng'} disabled={!data.project.selected_instrumental || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Final đã loại giọng' : 'Xuất Karaoke loại giọng'}</button></div>
                 <button className="verification-gate" disabled={dirty || saving || data.project.state === 'VERIFIED' || data.project.state === 'RENDERED'} type="button" onClick={markVerified}><span>{data.project.instrumental_confirmed ? '✓' : '○'} Instrumental</span><span>{lowConfidence === 0 ? '✓' : '○'} {lowConfidence ? `${lowConfidence} điểm nên kiểm tra` : 'Timing AI đã đạt'}</span><strong>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'ĐÃ VERIFIED' : 'VERIFIED là tùy chọn · không khóa xuất'}</strong></button>
-                <ExportList artifacts={data.artifacts} />
+                <ExportList
+                  projectId={data.project.id}
+                  artifacts={data.artifacts}
+                  onReload={onReload}
+                  onError={onError}
+                />
               </section>
             )}
           </div>
@@ -2650,10 +2660,75 @@ function EngineStatus({ label, ready, detail }: { label: string; ready: boolean;
   return <div className={`engine-status ${ready ? 'ready' : ''}`}><span>{ready ? '✓' : '○'}</span><div><strong>{label}</strong><small>{ready ? detail : 'Chưa cài · sẽ dùng fallback'}</small></div></div>;
 }
 
-function ExportList({ artifacts }: { artifacts: Artifact[] }) {
-  const exports = artifacts.filter((artifact) => artifact.kind === 'export');
+function ExportList({
+  projectId,
+  artifacts,
+  onReload,
+  onError,
+}: {
+  projectId: string;
+  artifacts: Artifact[];
+  onReload: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const exports = videoExportArtifacts(artifacts);
+
+  const downloadExport = (artifact: Artifact) => {
+    const link = document.createElement('a');
+    link.href = assetUrl(exportDownloadPath(artifact.url));
+    link.download = artifact.label;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const deleteExport = async (artifact: Artifact) => {
+    setDeletingId(artifact.id);
+    onError(null);
+    try {
+      await api<{ deleted: boolean }>(exportDeletePath(projectId, artifact.label), {
+        method: 'DELETE',
+      });
+      setDeleteCandidateId(null);
+      await onReload();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Không xoá được video xuất.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (!exports.length) return <p className="no-exports">Chưa có video xuất.</p>;
-  return <div className="export-list">{exports.map((artifact) => <a href={assetUrl(artifact.url)} download key={artifact.id}><span>MP4</span><div><strong>{artifact.label}</strong><small>{formatBytes(artifact.bytes)}</small></div><b>↓</b></a>)}</div>;
+  return (
+    <div className="export-list">
+      {exports.map((artifact) => {
+        const confirming = deleteCandidateId === artifact.id;
+        const deleting = deletingId === artifact.id;
+        return (
+          <article className={`export-item ${confirming ? 'is-confirming' : ''}`} key={artifact.id}>
+            <div className="export-item-head">
+              <span>MP4</span>
+              <div><strong>{artifact.label}</strong><small>{formatBytes(artifact.bytes)}</small></div>
+            </div>
+            {confirming ? (
+              <div className="export-delete-confirmation">
+                <span>Xoá vĩnh viễn file này?</span>
+                <button className="export-delete-confirm" disabled={deleting} type="button" onClick={() => void deleteExport(artifact)}>{deleting ? 'Đang xoá…' : 'Xoá ngay'}</button>
+                <button disabled={deleting} type="button" onClick={() => setDeleteCandidateId(null)}>Huỷ</button>
+              </div>
+            ) : (
+              <div className="export-file-actions">
+                <button className="export-download-button" type="button" onClick={() => downloadExport(artifact)} aria-label={`Tải xuống ${artifact.label}`}><span aria-hidden="true">↓</span>Tải xuống</button>
+                <button className="export-delete-button" disabled={Boolean(deletingId)} type="button" onClick={() => setDeleteCandidateId(artifact.id)}>Xoá</button>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
 }
 
 function LoadingStudio() {

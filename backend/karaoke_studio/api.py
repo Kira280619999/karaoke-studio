@@ -544,13 +544,41 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         return plan.model_copy(update={"assets": assets})
 
     @app.get("/api/projects/{project_id}/files/{relative_path:path}")
-    def project_file(project_id: str, relative_path: str) -> FileResponse:
+    def project_file(
+        project_id: str,
+        relative_path: str,
+        download: bool = False,
+    ) -> FileResponse:
         _require_project(store, project_id)
         project_dir = store.project_dir(project_id).resolve()
         path = (project_dir / relative_path).resolve()
         if project_dir not in path.parents or not path.is_file():
             raise HTTPException(404, "Artifact không tồn tại.")
+        if download:
+            return FileResponse(
+                path,
+                filename=path.name,
+                content_disposition_type="attachment",
+            )
         return FileResponse(path)
+
+    @app.delete("/api/projects/{project_id}/exports/{filename:path}")
+    def delete_export(project_id: str, filename: str) -> dict:
+        _require_project(store, project_id)
+        project_dir = store.project_dir(project_id).resolve()
+        export_dir = (project_dir / "exports").resolve()
+        path = (export_dir / filename).resolve()
+        if (
+            not filename
+            or Path(filename).name != filename
+            or path.parent != export_dir
+            or path.suffix.casefold() != ".mp4"
+            or not path.is_file()
+        ):
+            raise HTTPException(404, "Video xuất không tồn tại.")
+        size = path.stat().st_size
+        path.unlink()
+        return {"deleted": True, "filename": filename, "bytes": size}
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -174,6 +175,54 @@ def test_delete_project_removes_database_record_and_local_media(
     assert all(item["id"] != project_id for item in client.get("/api/projects").json())
     assert not project_dir.exists()
     assert client.delete(f"/api/projects/{project_id}").status_code == 404
+
+
+def test_export_download_and_scoped_delete(
+    test_settings, synthetic_video: Path
+) -> None:
+    client = TestClient(create_app(test_settings))
+    project = _import_project(client, synthetic_video)
+    project_id = project["id"]
+    project_dir = Store(test_settings).project_dir(project_id)
+    export_dir = project_dir / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filename = "ân-điển-test.mp4"
+    payload = b"local-export-fixture"
+    export_path = export_dir / filename
+    export_path.write_bytes(payload)
+
+    artifacts = client.get(f"/api/projects/{project_id}/artifacts")
+    assert artifacts.status_code == 200
+    artifact = next(item for item in artifacts.json() if item["label"] == filename)
+    assert artifact["kind"] == "export"
+    assert artifact["bytes"] == len(payload)
+
+    download = client.get(f"{artifact['url']}?download=true")
+    assert download.status_code == 200
+    assert download.content == payload
+    assert download.headers["content-disposition"].startswith("attachment;")
+
+    protected_path = project_dir / "work" / "protected.mp4"
+    protected_path.parent.mkdir(parents=True, exist_ok=True)
+    protected_path.write_bytes(b"keep")
+    traversal = quote("../work/protected.mp4", safe="")
+    refused = client.delete(f"/api/projects/{project_id}/exports/{traversal}")
+    assert refused.status_code in {404, 422}
+    assert protected_path.read_bytes() == b"keep"
+
+    deleted = client.delete(
+        f"/api/projects/{project_id}/exports/{quote(filename, safe='')}"
+    )
+    assert deleted.status_code == 200
+    assert deleted.json() == {
+        "deleted": True,
+        "filename": filename,
+        "bytes": len(payload),
+    }
+    assert not export_path.exists()
+    assert client.delete(
+        f"/api/projects/{project_id}/exports/{quote(filename, safe='')}"
+    ).status_code == 404
 
 
 def test_malformed_lrc_and_missing_audio_fail_closed(

@@ -550,10 +550,22 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .verification-gate strong { grid-column: 1/-1; color: var(--gold-soft); }
 .no-exports { color: #747982; font-size: 8px; }
 .export-list { display: grid; gap: 6px; margin-top: 11px; }
-.export-list a { display: grid; grid-template-columns: 27px 1fr auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; color: #c8cbd0; font-size: 8px; text-decoration: none; }
-.export-list a > div { display: grid; }
-.export-list a small { color: #717680; }
-.export-list a:hover { border-color: rgba(242,184,75,.26); }
+.export-item { padding: 8px; border: 1px solid var(--line); border-radius: 8px; color: #c8cbd0; background: rgba(255,255,255,.018); font-size: 8px; }
+.export-item-head { min-width: 0; display: grid; grid-template-columns: 31px minmax(0,1fr); align-items: center; gap: 8px; }
+.export-item-head > span { width: 31px; height: 27px; display: grid; place-items: center; border: 1px solid rgba(106,168,255,.24); border-radius: 5px; color: #cfe4ff; background: rgba(106,168,255,.08); font: 750 7px var(--font-geist-mono),monospace; }
+.export-item-head > div { min-width: 0; display: grid; gap: 2px; }
+.export-item-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-item-head small { color: #717680; }
+.export-file-actions { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; margin-top: 8px; }
+.export-download-button, .export-delete-button, .export-delete-confirmation button { min-height: 29px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #3a3c43; border-radius: 5px; padding: 0 10px; font-size: 8px; font-weight: 750; text-decoration: none; cursor: pointer; }
+.export-download-button { border-color: rgba(242,184,75,.34); color: #181208; background: var(--gold); }
+.export-download-button:hover { border-color: #ffe0a0; background: #f7c85f; }
+.export-delete-button { color: #ff9b9b; background: rgba(255,82,82,.055); }
+.export-delete-button:hover { border-color: rgba(255,108,108,.42); background: rgba(255,82,82,.1); }
+.export-delete-confirmation { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 5px; margin-top: 8px; padding-top: 7px; border-top: 1px solid #383a40; }
+.export-delete-confirmation > span { color: #efb0b0; line-height: 1.35; }
+.export-delete-confirmation button { min-height: 27px; color: #b9bdc5; background: #18191d; }
+.export-delete-confirmation .export-delete-confirm { border-color: rgba(255,91,91,.4); color: #fff; background: #8d2d35; }
 .loading-studio { min-height: 60vh; display: grid; place-items: center; color: #858a93; font-size: 11px; }
 
 @media (max-width: 1100px) {
@@ -1042,7 +1054,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .fcp-inspector .export-list,
 .fcp-inspector .no-exports { margin-right: 10px; margin-left: 10px; }
 .fcp-inspector .candidate-card,
-.fcp-inspector .export-list a { border-radius: 3px; background: #202126; }
+.fcp-inspector .export-item { border-radius: 3px; background: #202126; }
 
 .fcp-timeline-pane {
   grid-area: timeline;

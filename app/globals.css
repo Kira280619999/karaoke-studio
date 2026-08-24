@@ -253,8 +253,8 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .background-preview .background-scene-media { --background-zoom: 1; position: absolute; inset: -2%; width: 104%; height: 104%; object-fit: cover; transform: scale(var(--background-zoom)); transform-origin: center; transition: opacity .12s linear; will-change: opacity,transform; }
 .background-scene-status { position: absolute; z-index: 2; top: 8px; right: 8px; padding: 4px 6px; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; color: rgba(235,240,248,.72); background: rgba(3,5,8,.55); font: 650 6px var(--font-geist-mono),monospace; letter-spacing: .08em; backdrop-filter: blur(5px); }
 .karaoke-overlay { position: absolute; z-index: 3; inset: 0; pointer-events: none; }
-.preview-lyric { position: absolute; left: 4.5%; right: 4.5%; height: 12%; display: grid; place-items: center; overflow: visible; border: 0; color: #fff; background: transparent; font-family: inherit; font-size: clamp(18px,2.85vw,44px); font-weight: 900; line-height: .96; text-align: center; letter-spacing: -.025em; }
-.preview-lyric.lane-0 { bottom: 15%; }
+.preview-lyric { position: absolute; left: 4.5%; right: 4.5%; height: 14%; display: grid; place-items: center; overflow: visible; border: 0; color: #fff; background: transparent; font-family: inherit; font-size: clamp(22px,3.6vw,58px); font-weight: 900; line-height: .96; text-align: center; letter-spacing: -.025em; }
+.preview-lyric.lane-0 { bottom: 17%; }
 .preview-lyric.lane-1 { bottom: 3%; }
 .lyric-stack { --lyric-fit-x: 1; position: relative; width: max-content; max-width: none; display: inline-block; white-space: pre; transform: scaleX(var(--lyric-fit-x)); transform-origin: center; }
 .lyric-stack > span { position: relative; color: #fff; -webkit-text-stroke: .075em #06113f; paint-order: stroke fill; text-shadow: .075em .09em 0 #06113f,0 .13em .16em rgba(0,0,0,.6); white-space: inherit; }
@@ -605,7 +605,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
   .pipeline-status { overflow-x: auto; }
   .pipeline-status > div { min-width: 130px; }
   .analysis-launch { grid-template-columns: 1fr; padding: 22px; }
-  .preview-lyric { font-size: 16px; }
+  .preview-lyric { font-size: 20px; }
   .transition-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
   .transition-flow, .transition-actions { grid-template-columns: 1fr; }
   .transition-gap { grid-template-columns: auto auto; justify-content: center; }

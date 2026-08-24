@@ -149,5 +149,5 @@ def test_renderer_uses_timeline_font_without_changing_fixed_size(test_settings) 
     )
 
     assert renderer.font_path.name == "BeVietnamPro-Bold.ttf"
-    assert {asset.font.size for asset in renderer.assets.values()} == {91}
-    assert renderer.lane_y == (122, 238)
+    assert {asset.font.size for asset in renderer.assets.values()} == {108}
+    assert renderer.lane_y == (112, 248)

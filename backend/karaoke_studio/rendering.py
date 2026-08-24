@@ -167,12 +167,12 @@ class KaraokeRenderer:
         self.font_id = timeline.metadata.get("karaoke_font", "noto_sans")
         self.font_path = resolve_font(settings, self.font_id)
         self.highlight_color = karaoke_color_rgba(timeline.metadata.get("karaoke_color"))
-        self.font = load_font(self.font_path, round(self.preset.height * 0.084))
+        self.font = load_font(self.font_path, round(self.preset.height * 0.1))
         self.line_fonts: dict[str, ImageFont.FreeTypeFont] = {}
         self.line_scales: dict[str, float] = {}
         self.assets: dict[tuple[int, bool], LineAsset] = {}
-        upper = round(self.overlay_height * 0.34)
-        lower = round(self.overlay_height * 0.66)
+        upper = round(self.overlay_height * 0.31)
+        lower = round(self.overlay_height * 0.69)
         self.lane_y = (upper, lower)
         for index, line in enumerate(timeline.lines):
             y = self.lane_y[index % 2]
@@ -304,7 +304,7 @@ class KaraokeRenderer:
 
     def _draw_draft(self, frame: Image.Image) -> None:
         draw = ImageDraw.Draw(frame)
-        font = load_font(self.font_path, max(16, round(self.font.size * 0.34)))
+        font = load_font(self.font_path, max(16, round(self.font.size * 0.3)))
         text = "TIMING NOT VERIFIED"
         bbox = draw.textbbox((0, 0), text, font=font)
         x = self.width - (bbox[2] - bbox[0]) - 24

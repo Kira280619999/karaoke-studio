@@ -1111,7 +1111,19 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
             <span className="viewer-timecode">{formatFrameTime(currentTimeUs, timeline)} <i>/</i> {formatFrameTime(timeline.duration_us, timeline)}</span>
             <div className="viewer-tools" aria-hidden="true"><span>⌗</span><span>▣</span><span>100%</span></div>
           </div>
-          <div className="monitor-stage">
+          <div
+            className="monitor-stage"
+            role="button"
+            tabIndex={0}
+            aria-label={isPlaying ? 'Tạm dừng video xem trước' : 'Phát video xem trước'}
+            title={isPlaying ? 'Bấm để tạm dừng video' : 'Bấm để phát video'}
+            onClick={togglePlayback}
+            onKeyDown={(event) => {
+              if (event.key !== ' ' && event.key !== 'Enter') return;
+              event.preventDefault();
+              togglePlayback();
+            }}
+          >
             {data.backgroundPlan && (
               <BackgroundPreview
                 plan={data.backgroundPlan}

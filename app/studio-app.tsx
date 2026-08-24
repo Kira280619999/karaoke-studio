@@ -1217,6 +1217,10 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
               }
               setCurrentTimeUs(nowUs);
             }} />
+            <SongCreditOverlay
+              title={data.project.title}
+              artist={data.project.artist}
+            />
             <KaraokeOverlay
               timeline={timeline}
               nowUs={currentTimeUs}
@@ -1512,6 +1516,21 @@ function BackgroundSceneMedia({
       style={style}
       onLoadedMetadata={syncVideo}
     />
+  );
+}
+
+function SongCreditOverlay({ title, artist }: { title: string; artist: string }) {
+  return (
+    <div
+      className="song-credit-overlay"
+      aria-label={artist ? `Tên bài hát ${title}, ca sĩ hoặc nguồn ${artist}` : `Tên bài hát ${title}`}
+    >
+      <i aria-hidden="true" />
+      <span>
+        <strong>{title}</strong>
+        {artist && <small>CA SĨ / NGUỒN · {artist}</small>}
+      </span>
+    </div>
   );
 }
 

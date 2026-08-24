@@ -28,6 +28,7 @@ KARAOKE_NEXT_LINE_LEAD_US = 4_500_000
 KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000
 KARAOKE_INSTRUMENTAL_LEAD_US = 1_500_000
 KARAOKE_MAX_ROW_CHARACTERS = 48
+SONG_CREDIT_ACCENT = (242, 184, 75, 255)
 
 
 def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int) -> int | None:
@@ -192,6 +193,88 @@ class RenderedLineRow:
     base: Image.Image
     highlight: Image.Image
     glow: Image.Image
+
+
+def song_credit_card(
+    title: str,
+    artist: str,
+    preset: RenderPreset,
+    font_path: Path,
+) -> Image.Image:
+    """Build the persistent title/artist card used by every exported frame."""
+    scale = max(0.45, preset.height / 1080)
+    card_width = min(round(preset.width * 0.68), round(1080 * scale))
+    card_height = round((142 if artist.strip() else 112) * scale)
+    radius = max(6, round(15 * scale))
+    padding_x = max(12, round(24 * scale))
+    padding_y = max(9, round(17 * scale))
+    accent_width = max(3, round(6 * scale))
+    accent_gap = max(8, round(18 * scale))
+    text_left = padding_x + accent_width + accent_gap
+    available_width = max(1, card_width - text_left - padding_x)
+    title_text = title.strip() or "Karaoke"
+    artist_text = artist.strip()
+
+    def fitted_font(text: str, initial_size: int, minimum_size: int) -> ImageFont.FreeTypeFont:
+        size = max(minimum_size, initial_size)
+        while size > minimum_size:
+            candidate = load_font(font_path, size)
+            if candidate.getlength(text) <= available_width:
+                return candidate
+            size -= 1
+        return load_font(font_path, minimum_size)
+
+    title_font = fitted_font(
+        title_text,
+        max(16, round(48 * scale)),
+        max(11, round(24 * scale)),
+    )
+    artist_label = f"CA SĨ / NGUỒN · {artist_text}" if artist_text else ""
+    artist_font = fitted_font(
+        artist_label,
+        max(10, round(20 * scale)),
+        max(8, round(13 * scale)),
+    )
+    card = Image.new("RGBA", (card_width, card_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle(
+        (0, 0, card_width - 1, card_height - 1),
+        radius=radius,
+        fill=(3, 8, 16, 188),
+        outline=(255, 255, 255, 32),
+        width=max(1, round(scale)),
+    )
+    draw.rounded_rectangle(
+        (padding_x, padding_y, padding_x + accent_width, card_height - padding_y),
+        radius=max(2, accent_width // 2),
+        fill=SONG_CREDIT_ACCENT,
+    )
+    if artist_label:
+        title_y = round(card_height * 0.39)
+        artist_y = round(card_height * 0.72)
+    else:
+        title_y = card_height // 2
+        artist_y = 0
+    draw.text(
+        (text_left, title_y),
+        title_text,
+        font=title_font,
+        anchor="lm",
+        fill=WHITE,
+        stroke_width=max(1, round(scale)),
+        stroke_fill=(0, 0, 0, 175),
+    )
+    if artist_label:
+        draw.text(
+            (text_left, artist_y),
+            artist_label,
+            font=artist_font,
+            anchor="lm",
+            fill=(248, 217, 146, 255),
+            stroke_width=max(1, round(scale)),
+            stroke_fill=(0, 0, 0, 165),
+        )
+    return card
 
 
 class LineAsset:
@@ -544,19 +627,29 @@ def render_video(
         preset,
         settings,
     )
-    overlay_input_index = background_input_count
-    audio_input_index = background_input_count + 1
+    credit_path = project_dir / "work" / f"song-credit-{preset.width}x{preset.height}.png"
+    credit_path.parent.mkdir(parents=True, exist_ok=True)
+    song_credit_card(project.title, project.artist, preset, renderer.font_path).save(credit_path)
+    credit_input_index = background_input_count
+    overlay_input_index = background_input_count + 1
+    audio_input_index = background_input_count + 2
+    credit_x = round(preset.width * 0.04)
+    credit_y = round(preset.height * 0.05)
     overlay_y = preset.height - renderer.overlay_height - round(preset.height * 0.025)
     filter_graph = (
         f"{background_filter};"
+        f"[{credit_input_index}:v]format=rgba[credit];"
+        f"[bg][credit]overlay={credit_x}:{credit_y}:eof_action=repeat:format=auto[credited];"
         f"[{overlay_input_index}:v]fps={preset.ffmpeg_fps},format=rgba[ov];"
-        f"[bg][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
+        f"[credited][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
     )
     command = [
         settings.ffmpeg,
         "-hide_banner",
         "-y",
         *background_args,
+        "-i",
+        str(credit_path),
         "-thread_queue_size",
         "1024",
         "-f",

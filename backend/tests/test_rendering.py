@@ -6,11 +6,13 @@ from karaoke_studio.lrc import parse_lrc
 from karaoke_studio.models import SweepCurveV1, SweepPointV1
 from karaoke_studio.motion import line_progress_ppm
 from karaoke_studio.rendering import (
+    SONG_CREDIT_ACCENT,
     KaraokeRenderer,
     RenderPreset,
     karaoke_countdown_number,
     lyric_display_rows,
     resolve_preset,
+    song_credit_card,
     visible_karaoke_rows,
 )
 
@@ -80,6 +82,23 @@ def test_preview_frame_has_native_dimensions(test_settings) -> None:
     timeline = parse_lrc("[00:00.00]Ngài là ánh sáng", duration_us=2_000_000)
     renderer = KaraokeRenderer(timeline, RenderPreset(1920, 1080, 60, 1), test_settings, True, True)
     assert renderer.frame(1_000_000).size == (1920, 360)
+
+
+def test_song_title_and_artist_card_is_ready_to_burn_into_export(test_settings) -> None:
+    preset = RenderPreset(1920, 1080, 60, 1)
+    card = song_credit_card(
+        "Ngài Là Ánh Sáng Đời Con",
+        "Ban thờ phượng EN2",
+        preset,
+        test_settings.root / "backend" / "karaoke_studio" / "assets" / "BeVietnamPro-Bold.ttf",
+    )
+
+    assert card.mode == "RGBA"
+    assert card.width <= round(preset.width * 0.68)
+    assert card.height == 142
+    assert card.getbbox() == (0, 0, card.width, card.height)
+    colors = card.getcolors(maxcolors=card.width * card.height) or []
+    assert any(pixel[:3] == SONG_CREDIT_ACCENT[:3] for _count, pixel in colors)
 
 
 def test_renderer_uses_selected_sweep_color_without_a_black_lyric_plate(

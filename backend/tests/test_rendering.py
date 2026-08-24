@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from karaoke_studio.lrc import parse_lrc
 from karaoke_studio.models import SweepCurveV1, SweepPointV1
-from karaoke_studio.motion import evaluate_display_sweep_ppm
+from karaoke_studio.motion import line_progress_ppm
 from karaoke_studio.rendering import (
     KaraokeRenderer,
     RenderPreset,
@@ -124,7 +124,7 @@ def test_each_fixed_lane_wraps_long_text_and_fits_every_display_row(test_setting
     max_width = 1280 * 0.88
     assert short_asset.text_width <= max_width
     assert long_asset.text_width <= max_width
-    assert long_asset.font.size < short_asset.font.size
+    assert long_asset.font.size == short_asset.font.size
     assert short_asset.scale_x == 1
     assert len(short_asset.rows) == 1
     assert len(long_asset.rows) == 2
@@ -147,7 +147,7 @@ def test_display_wrap_uses_the_same_authoritative_text_and_progress_range() -> N
     assert rows[1].end_progress_ppm == 1_000_000
 
 
-def test_renderer_uses_exact_same_smoothed_integer_sweep_progress(test_settings) -> None:
+def test_renderer_uses_exact_same_cinematic_line_progress(test_settings) -> None:
     timeline = parse_lrc("[00:01.00]Ngân", duration_us=3_000_000)
     token = timeline.lines[0].tokens[0]
     token.sweep = SweepCurveV1(
@@ -167,7 +167,7 @@ def test_renderer_uses_exact_same_smoothed_integer_sweep_progress(test_settings)
     now_us = 1_700_000
     boundary = renderer._highlight_boundary(line, left, now_us)
     expected = left + asset.font.getlength(line.text) * asset.scale_x * (
-        evaluate_display_sweep_ppm(token.sweep, now_us) / 1_000_000
+        line_progress_ppm(line, now_us) / 1_000_000
     )
     assert abs(boundary - expected) < 1e-9
 
@@ -180,7 +180,7 @@ def test_1080p120_preset_is_native_120fps() -> None:
     assert preset == RenderPreset(1920, 1080, 120, 1)
 
 
-def test_renderer_uses_timeline_font_and_only_reduces_wrapped_rows(test_settings) -> None:
+def test_renderer_uses_timeline_font_and_keeps_wrapped_rows_the_same_size(test_settings) -> None:
     timeline = parse_lrc(
         "[00:00.00]Xin Đức Thánh Linh đưa dắt chúng con vững tin nơi Ngài\n"
         "[00:03.00]Nguyện Chúa nắm tay bước qua hiểm nguy",
@@ -190,6 +190,9 @@ def test_renderer_uses_timeline_font_and_only_reduces_wrapped_rows(test_settings
     renderer = KaraokeRenderer(timeline, RenderPreset(1920, 1080, 60, 1), test_settings, True, True)
 
     assert renderer.font_path.name == "BeVietnamPro-Bold.ttf"
-    assert renderer.assets[(0, True)].font.size == 93
-    assert renderer.assets[(1, True)].font.size == 108
-    assert renderer.lane_y == (90, 270)
+    assert renderer.assets[(0, True)].font.size == 82
+    assert renderer.assets[(1, True)].font.size == 82
+    assert renderer.lane_y == (108, 275)
+    assert renderer.lane_y[1] - renderer.lane_y[0] == round(
+        renderer.wrapped_font.size * 1.32 * 1.5
+    ) + round(renderer.font.size * 0.06)

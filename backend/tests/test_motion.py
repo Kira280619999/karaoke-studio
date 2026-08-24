@@ -10,6 +10,7 @@ from karaoke_studio.motion import (
     GraphemeSpan,
     RhythmGrid,
     canonical_progress_ppm,
+    cinematic_line_progress_ppm,
     evaluate_display_sweep_ppm,
     evaluate_sweep_ppm,
     line_progress_ppm,
@@ -108,6 +109,51 @@ def test_display_sweep_damps_velocity_jumps_and_keeps_exact_endpoints() -> None:
     assert display[1] < acoustic[1]
     assert display[-2] > acoustic[-2]
     assert display == sorted(display)
+
+
+def test_cinematic_line_path_is_continuous_across_analyzed_word_boundaries() -> None:
+    line = parse_lrc("[00:01.00]Xin chào Ngài", 4_000_000).lines[0]
+    boundaries = [1_000_000, 1_600_000, 2_700_000, 4_000_000]
+    progress = [0, 180_000, 650_000, 1_000_000]
+    for index, token in enumerate(line.tokens):
+        token.start_us = boundaries[index]
+        token.end_us = boundaries[index + 1]
+        token.sweep = SweepCurveV1(
+            source="ensemble_ctc",
+            confidence=0.96,
+            verified=True,
+            points=[
+                SweepPointV1(
+                    time_us=boundaries[index],
+                    line_progress_ppm=progress[index],
+                ),
+                SweepPointV1(
+                    time_us=boundaries[index] + 20_000,
+                    line_progress_ppm=progress[index] + 3 * (
+                        progress[index + 1] - progress[index]
+                    ) // 4,
+                ),
+                SweepPointV1(
+                    time_us=boundaries[index + 1],
+                    line_progress_ppm=progress[index + 1],
+                ),
+            ],
+        )
+    line.end_us = boundaries[-1]
+
+    assert [cinematic_line_progress_ppm(line, value) for value in boundaries] == progress
+    samples = [
+        cinematic_line_progress_ppm(line, value)
+        for value in range(line.start_us, line.end_us + 1, 8_333)
+    ]
+    numeric = [int(value) for value in samples if value is not None]
+    assert numeric == sorted(numeric)
+    for boundary in boundaries[1:-1]:
+        before = cinematic_line_progress_ppm(line, boundary - 1_000)
+        center = cinematic_line_progress_ppm(line, boundary)
+        after = cinematic_line_progress_ppm(line, boundary + 1_000)
+        assert before is not None and center is not None and after is not None
+        assert abs((center - before) - (after - center)) <= 3
 
 
 def test_linear_fallback_sweeps_spaces_and_punctuation_without_backward_motion(

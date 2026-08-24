@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   activeLineAt,
   applyTimingSuggestion,
+  cinematicLineProgressPpm,
   deleteTimelineLine,
   deleteTimelineToken,
   editTimelineTokenText,
@@ -15,6 +16,9 @@ import {
   karaokeCountdownCue,
   karaokeDisplayRows,
   karaokeVisibleLineIndexes,
+  KARAOKE_PREVIEW_FPS,
+  KARAOKE_PREVIEW_HEIGHT,
+  KARAOKE_PREVIEW_WIDTH,
   lyricFitScale,
   manualLineReplayRange,
   manualTransitionReplayRange,
@@ -23,10 +27,13 @@ import {
   moveTokenBy,
   nearestMarkerWithin,
   rescaleSweep,
+  previewFrameTimeUs,
   setBoundary,
   setPreviousLineEnd,
   setTransitionGap,
   setTransitionStart,
+  smoothedPlaybackTimeUs,
+  stepPreviewFrameTimeUs,
   timeUsToPixels,
   tokenDisplaySegments,
   trimTokenEdge,
@@ -641,6 +648,74 @@ test('display sweep damps internal velocity changes but preserves exact endpoint
   assert.ok(display[1] < acoustic[1]);
   assert.ok(display[3] > acoustic[3]);
   assert.deepEqual(display, [...display].sort((a, b) => a - b));
+});
+
+test('cinematic line path stays continuous through analyzed word boundaries', () => {
+  const analyzed = structuredClone(line);
+  const boundaries = [1_000_000, 1_600_000, 3_000_000];
+  const progress = [0, 280_000, 1_000_000];
+  analyzed.tokens.forEach((token, index) => {
+    token.start_us = boundaries[index];
+    token.end_us = boundaries[index + 1];
+    token.sweep = {
+      schema_version: '1.0',
+      source: 'ensemble_ctc',
+      confidence: 0.96,
+      verified: true,
+      points: [
+        { time_us: boundaries[index], line_progress_ppm: progress[index] },
+        {
+          time_us: boundaries[index] + 20_000,
+          line_progress_ppm: progress[index]
+            + Math.round((progress[index + 1] - progress[index]) * 0.75),
+        },
+        { time_us: boundaries[index + 1], line_progress_ppm: progress[index + 1] },
+      ],
+    };
+  });
+
+  assert.deepEqual(
+    boundaries.map((timeUs) => cinematicLineProgressPpm(analyzed, timeUs)),
+    progress,
+  );
+  const samples = Array.from(
+    { length: Math.floor((analyzed.end_us - analyzed.start_us) / 8_333) + 1 },
+    (_, index) => cinematicLineProgressPpm(analyzed, analyzed.start_us + index * 8_333)!,
+  );
+  assert.deepEqual(samples, [...samples].sort((a, b) => a - b));
+  const boundary = boundaries[1];
+  const before = cinematicLineProgressPpm(analyzed, boundary - 1_000)!;
+  const center = cinematicLineProgressPpm(analyzed, boundary)!;
+  const after = cinematicLineProgressPpm(analyzed, boundary + 1_000)!;
+  assert.ok(Math.abs((center - before) - (after - center)) <= 3);
+});
+
+test('display clock fills the repeated frames of a 30 fps source at 60 Hz', () => {
+  const clock = { anchorMediaUs: null, anchorSampleMs: 0, playbackRate: 1 };
+  const samples = Array.from({ length: 12 }, (_, index) => {
+    const sampleMs = index * (1_000 / 60);
+    const rawFrame = Math.floor(index / 2) * (1_000_000 / 30);
+    return smoothedPlaybackTimeUs(clock, rawFrame, sampleMs, 1);
+  });
+  assert.ok(samples.every((value, index) => index === 0 || value > samples[index - 1]));
+  assert.ok(samples.every((value, index) => Math.abs(value - index * (1_000_000 / 60)) <= 1));
+
+  const seeked = smoothedPlaybackTimeUs(clock, 3_000_000, 250, 1, true);
+  assert.equal(seeked, 3_000_000);
+});
+
+test('Preview defaults to the exact 1920x1080 120 fps output grid', () => {
+  assert.deepEqual(
+    [KARAOKE_PREVIEW_WIDTH, KARAOKE_PREVIEW_HEIGHT, KARAOKE_PREVIEW_FPS],
+    [1_920, 1_080, 120],
+  );
+  assert.deepEqual(
+    [0, 8_333, 16_666, 16_667, 1_000_000].map(previewFrameTimeUs),
+    [0, 0, 8_333, 16_667, 1_000_000],
+  );
+  assert.equal(stepPreviewFrameTimeUs(0, 1), 8_333);
+  assert.equal(stepPreviewFrameTimeUs(8_333, 1), 16_667);
+  assert.equal(stepPreviewFrameTimeUs(16_667, -1), 8_333);
 });
 
 test('manual boundary edit rescales curve and invalidates motion verification', () => {

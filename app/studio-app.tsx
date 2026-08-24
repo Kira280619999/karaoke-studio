@@ -46,6 +46,9 @@ import {
   highlightPercent,
   insertTimelineLine,
   insertTimelineToken,
+  KARAOKE_PREVIEW_FPS,
+  KARAOKE_PREVIEW_HEIGHT,
+  KARAOKE_PREVIEW_WIDTH,
   karaokeCountdownCue,
   karaokeDisplayRows,
   karaokeVisibleLineIndexes,
@@ -56,13 +59,17 @@ import {
   moveTokenBy,
   nearestMarkerWithin,
   lyricFitScale,
+  previewFrameTimeUs,
   setPreviousLineEnd,
   trimTokenEdge,
   setTransitionGap,
   setTransitionStart,
+  smoothedPlaybackTimeUs,
+  stepPreviewFrameTimeUs,
   timeUsToPixels,
   verifyTiming,
   type ManualLoopRange,
+  type SmoothPlaybackClock,
 } from './lib/timeline';
 import type {
   Artifact,
@@ -611,7 +618,7 @@ function ProjectWorkspace({
     <div className={`workspace-view ${['IMPORTED', 'FAILED'].includes(project.state) ? 'analysis-workspace' : 'edit-workspace'}`}>
       <div className="editor-project-strip">
         <div className="project-titlebar">
-          <div><span className="section-kicker">PROJECT / {project.id.slice(-6).toUpperCase()}</span><h1>{project.title}</h1><p>{project.artist || 'Chưa có tên ca sĩ'} · {project.width}×{project.height} · {project.fps} fps</p></div>
+          <div><span className="section-kicker">PROJECT / {project.id.slice(-6).toUpperCase()}</span><h1>{project.title}</h1><p>{project.artist || 'Chưa có tên ca sĩ'} · Nguồn {project.width}×{project.height} · {project.fps} fps</p></div>
           <div className="title-actions">
             {!['IMPORTED', 'FAILED'].includes(project.state) && (
               <>
@@ -890,13 +897,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   };
 
   const stepViewerFrame = (direction: -1 | 1) => {
-    const frameUs = Math.max(
-      1,
-      Math.round(1_000_000 * timeline.fps_denominator / timeline.fps_numerator),
-    );
     updateLoopRange(null);
     videoRef.current?.pause();
-    seek(Math.max(0, Math.min(timeline.duration_us, currentTimeUs + direction * frameUs)));
+    seek(Math.min(
+      timeline.duration_us,
+      stepPreviewFrameTimeUs(currentTimeUs, direction),
+    ));
   };
 
   const setVolume = (value: number) => {
@@ -1149,12 +1155,15 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     <section className="fcp-editor-workspace">
         <section className="monitor-panel">
           <div className="panel-toolbar">
-            <div><span className="viewer-title">VIEWER</span><strong className="mix-audio-badge">● ORIGINAL MIX</strong>{data.backgroundPlan && <strong className="auto-scene-badge">✦ AUTO SCENE · {data.backgroundPlan.assets.length}</strong>}</div>
-            <span className="viewer-timecode">{formatFrameTime(currentTimeUs, timeline)} <i>/</i> {formatFrameTime(timeline.duration_us, timeline)}</span>
+            <div><span className="viewer-title">VIEWER</span><strong className="preview-quality-badge" aria-label="Preview mặc định 1920 nhân 1080, 120 fps">◆ 1080P · 120 FPS</strong><strong className="mix-audio-badge">● ORIGINAL MIX</strong>{data.backgroundPlan && <strong className="auto-scene-badge">✦ AUTO SCENE · {data.backgroundPlan.assets.length}</strong>}</div>
+            <span className="viewer-timecode">{formatFrameTime(currentTimeUs, timeline, KARAOKE_PREVIEW_FPS, 1)} <i>/</i> {formatFrameTime(timeline.duration_us, timeline, KARAOKE_PREVIEW_FPS, 1)}</span>
             <div className="viewer-tools" aria-hidden="true"><span>⌗</span><span>▣</span><span>100%</span></div>
           </div>
           <div
             className="monitor-stage"
+            data-preview-fps={KARAOKE_PREVIEW_FPS}
+            data-preview-height={KARAOKE_PREVIEW_HEIGHT}
+            data-preview-width={KARAOKE_PREVIEW_WIDTH}
             role="button"
             tabIndex={0}
             aria-label={isPlaying ? 'Tạm dừng video xem trước' : 'Phát video xem trước'}
@@ -1212,7 +1221,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
           </div>
           <Waveform data={data.waveform?.mix ?? []} nowUs={currentTimeUs} durationUs={timeline.duration_us} onSeek={seek} />
           <div className="viewer-transport-bar">
-            <span>{loopRange ? `${loopRange.kind === 'transition' ? 'CHUYỂN CÂU' : loopRange.kind === 'line' ? 'NGUYÊN CÂU' : 'LOOP TỪ'} · ${activeLine?.tokens.find((token) => token.id === loopRange.tokenId)?.text ?? 'TIMING'}` : 'CFR · TIMELINE V1'}</span>
+            <span>{loopRange ? `${loopRange.kind === 'transition' ? 'CHUYỂN CÂU' : loopRange.kind === 'line' ? 'NGUYÊN CÂU' : 'LOOP TỪ'} · ${activeLine?.tokens.find((token) => token.id === loopRange.tokenId)?.text ?? 'TIMING'}` : 'PREVIEW · 1920×1080 · 120 FPS'}</span>
             <div className="viewer-transport">
               <button title="Lùi một frame" type="button" onClick={() => stepViewerFrame(-1)}>‹│</button>
               <button title="Về đầu câu" type="button" onClick={() => seek(activeLine?.start_us ?? 0)}>│◀</button>
@@ -1410,10 +1419,23 @@ function useBackgroundPreviewClock(
     if (!playing) return;
     let frameId = 0;
     let active = true;
-    const tick = () => {
+    const clock: SmoothPlaybackClock = {
+      anchorMediaUs: null,
+      anchorSampleMs: 0,
+      playbackRate: 1,
+    };
+    const tick = (sampleMs: number) => {
       if (!active) return;
       const media = mediaRef.current;
-      if (media) setSampledUs(Math.round(media.currentTime * 1_000_000));
+      if (media) {
+        setSampledUs(previewFrameTimeUs(smoothedPlaybackTimeUs(
+          clock,
+          media.currentTime * 1_000_000,
+          sampleMs,
+          media.playbackRate,
+          media.paused || media.seeking || media.readyState < HTMLMediaElement.HAVE_FUTURE_DATA,
+        )));
+      }
       frameId = window.requestAnimationFrame(tick);
     };
     frameId = window.requestAnimationFrame(tick);
@@ -1609,13 +1631,15 @@ function FittedKaraokeLine({
   playing: boolean;
 }) {
   const stackRef = useRef<HTMLDivElement>(null);
-  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const rowRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const highlightRefs = useRef<Array<HTMLElement | null>>([]);
   const fallbackNowUsRef = useRef(nowUs);
   const displayRows = useMemo(() => karaokeDisplayRows(line), [line]);
 
   const paintHighlight = useCallback((sampledUs: number) => {
-    const progressPpm = Math.round(highlightPercent(line, sampledUs) * 10_000);
+    const progressPpm = Math.round(
+      highlightPercent(line, previewFrameTimeUs(sampledUs)) * 10_000,
+    );
     displayRows.forEach((row, index) => {
       const highlight = highlightRefs.current[index];
       if (!highlight) return;
@@ -1641,12 +1665,13 @@ function FittedKaraokeLine({
       if (cancelled) return;
       const horizontalSafeArea = Math.max(16, lane.clientWidth * 0.035);
       const availableWidth = Math.max(1, lane.clientWidth - horizontalSafeArea * 2);
-      rowRefs.current.forEach((row) => {
-        if (!row) return;
+      rowRefs.current.forEach((text) => {
+        const row = text?.parentElement;
+        if (!text || !row) return;
         row.style.setProperty('--lyric-fit-x', '1');
         row.style.setProperty(
           '--lyric-fit-x',
-          String(lyricFitScale(availableWidth, row.scrollWidth)),
+          String(lyricFitScale(availableWidth, text.scrollWidth)),
         );
       });
     };
@@ -1669,11 +1694,24 @@ function FittedKaraokeLine({
     if (!active || !playing) return;
     let frameId = 0;
     let running = true;
-    const paintFrame = () => {
+    const clock: SmoothPlaybackClock = {
+      anchorMediaUs: null,
+      anchorSampleMs: 0,
+      playbackRate: 1,
+    };
+    const paintFrame = (sampleMs: number) => {
       if (!running) return;
       const media = mediaRef.current;
       paintHighlight(
-        media ? Math.round(media.currentTime * 1_000_000) : fallbackNowUsRef.current,
+        media
+          ? smoothedPlaybackTimeUs(
+            clock,
+            media.currentTime * 1_000_000,
+            sampleMs,
+            media.playbackRate,
+            media.paused || media.seeking || media.readyState < HTMLMediaElement.HAVE_FUTURE_DATA,
+          )
+          : fallbackNowUsRef.current,
       );
       frameId = window.requestAnimationFrame(paintFrame);
     };
@@ -1687,7 +1725,9 @@ function FittedKaraokeLine({
   return (
     <div className={`lyric-stack ${displayRows.length > 1 ? 'is-multiline' : ''}`} ref={stackRef}>
       {displayRows.map((row, index) => {
-        const progressPpm = Math.round(highlightPercent(line, nowUs) * 10_000);
+        const progressPpm = Math.round(
+          highlightPercent(line, previewFrameTimeUs(nowUs)) * 10_000,
+        );
         const rowProgress = progressPpm <= row.startProgressPpm
           ? 0
           : progressPpm >= row.endProgressPpm
@@ -1698,9 +1738,8 @@ function FittedKaraokeLine({
           <div
             className="lyric-stack-row"
             key={`${line.id}-${index}`}
-            ref={(element) => { rowRefs.current[index] = element; }}
           >
-            <span>{row.text}</span>
+            <span ref={(element) => { rowRefs.current[index] = element; }}>{row.text}</span>
             {active && (
               <b
                 ref={(element) => { highlightRefs.current[index] = element; }}
@@ -2621,10 +2660,18 @@ function LoadingStudio() {
   return <div className="loading-studio"><span /><strong>Đang mở project…</strong><small>Đọc timeline và artifact local</small></div>;
 }
 
-function formatFrameTime(us: number, timeline: Timeline): string {
-  const fps = timeline.fps_numerator / Math.max(1, timeline.fps_denominator);
+function formatFrameTime(
+  us: number,
+  timeline: Timeline,
+  fpsNumerator = timeline.fps_numerator,
+  fpsDenominator = timeline.fps_denominator,
+): string {
+  const fps = fpsNumerator / Math.max(1, fpsDenominator);
   const nominalFps = Math.max(1, Math.round(fps));
-  const totalFrames = Math.max(0, Math.floor((us * timeline.fps_numerator) / (1_000_000 * Math.max(1, timeline.fps_denominator))));
+  const totalFrames = Math.max(
+    0,
+    Math.floor((us * fpsNumerator) / (1_000_000 * Math.max(1, fpsDenominator))),
+  );
   const frames = totalFrames % nominalFps;
   const totalSeconds = Math.floor(totalFrames / nominalFps);
   const seconds = totalSeconds % 60;

@@ -21,6 +21,8 @@ WHITE = (248, 247, 241, 255)
 PREVIEW = (215, 222, 231, 235)
 INK = (0, 0, 0, 225)
 KARAOKE_SHADOW = (5, 16, 59, 245)
+KARAOKE_ROW_SPACING_EM = 1.32
+KARAOKE_LOWER_ROW_GAP_EM = 0.06
 KARAOKE_COUNTDOWN_US = 3_000_000
 KARAOKE_NEXT_LINE_LEAD_US = 4_500_000
 KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000
@@ -209,7 +211,7 @@ class LineAsset:
         self.highlight = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
         self.glow = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
         display_rows = lyric_display_rows(line, font)
-        row_spacing = round(font.size * 0.9)
+        row_spacing = round(font.size * KARAOKE_ROW_SPACING_EM)
         row_y_values = (
             [y] if len(display_rows) == 1 else [y - row_spacing // 2, y + row_spacing // 2]
         )
@@ -343,13 +345,15 @@ class KaraokeRenderer:
         self.font_id = timeline.metadata.get("karaoke_font", "noto_sans")
         self.font_path = resolve_font(settings, self.font_id)
         self.highlight_color = karaoke_color_rgba(timeline.metadata.get("karaoke_color"))
-        self.font = load_font(self.font_path, round(self.preset.height * 0.1))
-        self.wrapped_font = load_font(self.font_path, round(self.preset.height * 0.086))
+        self.font = load_font(self.font_path, round(self.preset.height * 0.076))
+        self.wrapped_font = self.font
         self.line_fonts: dict[str, ImageFont.FreeTypeFont] = {}
         self.line_scales: dict[str, float] = {}
         self.assets: dict[tuple[int, bool], LineAsset] = {}
-        upper = round(self.overlay_height * 0.25)
-        lower = round(self.overlay_height * 0.75)
+        lane_base = round(self.overlay_height * 0.75)
+        wrapped_row_spacing = round(self.wrapped_font.size * KARAOKE_ROW_SPACING_EM)
+        upper = lane_base - round(wrapped_row_spacing * 1.5)
+        lower = lane_base + round(self.font.size * KARAOKE_LOWER_ROW_GAP_EM)
         self.lane_y = (upper, lower)
         for index, line in enumerate(timeline.lines):
             y = self.lane_y[index % 2]

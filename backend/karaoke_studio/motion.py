@@ -235,11 +235,103 @@ def evaluate_display_sweep_ppm(curve: SweepCurveV1, now_us: int) -> int:
     return round((acoustic + linear * 3) / 4)
 
 
+def _monotone_tangents(points: list[tuple[int, int]]) -> list[float]:
+    """Return PCHIP tangents for a monotone time/progress path."""
+    if len(points) == 2:
+        slope = (points[1][1] - points[0][1]) / max(1, points[1][0] - points[0][0])
+        return [slope, slope]
+    intervals = [points[index + 1][0] - points[index][0] for index in range(len(points) - 1)]
+    slopes = [
+        (points[index + 1][1] - points[index][1]) / max(1, intervals[index])
+        for index in range(len(points) - 1)
+    ]
+    tangents = [0.0] * len(points)
+
+    def endpoint_tangent(first_h: int, second_h: int, first_slope: float, second_slope: float) -> float:
+        tangent = ((2 * first_h + second_h) * first_slope - first_h * second_slope) / (
+            first_h + second_h
+        )
+        if tangent * first_slope <= 0:
+            return 0.0
+        if first_slope * second_slope < 0 and abs(tangent) > abs(3 * first_slope):
+            return 3 * first_slope
+        return tangent
+
+    tangents[0] = endpoint_tangent(intervals[0], intervals[1], slopes[0], slopes[1])
+    tangents[-1] = endpoint_tangent(
+        intervals[-1], intervals[-2], slopes[-1], slopes[-2]
+    )
+    for index in range(1, len(points) - 1):
+        before = slopes[index - 1]
+        after = slopes[index]
+        if before <= 0 or after <= 0:
+            tangents[index] = 0.0
+            continue
+        before_h = intervals[index - 1]
+        after_h = intervals[index]
+        first_weight = 2 * after_h + before_h
+        second_weight = after_h + 2 * before_h
+        tangents[index] = (first_weight + second_weight) / (
+            first_weight / before + second_weight / after
+        )
+    return tangents
+
+
+def _evaluate_monotone_path_ppm(points: list[tuple[int, int]], now_us: int) -> int:
+    if now_us <= points[0][0]:
+        return points[0][1]
+    if now_us >= points[-1][0]:
+        return points[-1][1]
+    times = [point[0] for point in points]
+    right = bisect.bisect_right(times, now_us)
+    left = right - 1
+    start_time, start_progress = points[left]
+    end_time, end_progress = points[right]
+    duration = max(1, end_time - start_time)
+    position = (now_us - start_time) / duration
+    position_squared = position * position
+    position_cubed = position_squared * position
+    tangents = _monotone_tangents(points)
+    progress = (
+        (2 * position_cubed - 3 * position_squared + 1) * start_progress
+        + (position_cubed - 2 * position_squared + position)
+        * duration
+        * tangents[left]
+        + (-2 * position_cubed + 3 * position_squared) * end_progress
+        + (position_cubed - position_squared) * duration * tangents[right]
+    )
+    return round(max(start_progress, min(end_progress, progress)))
+
+
+def cinematic_line_progress_ppm(line: LineTiming, now_us: int) -> int | None:
+    """Smooth the display across analyzed word boundaries without moving them."""
+    if not line.tokens or any(token.sweep is None for token in line.tokens):
+        return None
+    points: list[tuple[int, int]] = []
+    for token in line.tokens:
+        assert token.sweep is not None
+        for point in (token.sweep.points[0], token.sweep.points[-1]):
+            candidate = (point.time_us, point.line_progress_ppm)
+            if points and candidate[0] == points[-1][0]:
+                if candidate[1] != points[-1][1]:
+                    return None
+                continue
+            if points and (candidate[0] < points[-1][0] or candidate[1] < points[-1][1]):
+                return None
+            points.append(candidate)
+    if len(points) < 2:
+        return None
+    return _evaluate_monotone_path_ppm(points, now_us)
+
+
 def line_progress_ppm(line: LineTiming, now_us: int) -> int | None:
     if now_us <= line.start_us:
         return 0
     if now_us >= line.end_us:
         return PPM
+    cinematic_progress = cinematic_line_progress_ppm(line, now_us)
+    if cinematic_progress is not None:
+        return cinematic_progress
     previous_progress = 0
     for token in line.tokens:
         if now_us < token.start_us:

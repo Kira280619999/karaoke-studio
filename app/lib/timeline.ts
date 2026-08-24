@@ -25,7 +25,66 @@ export interface KaraokeDisplayRow {
   endProgressPpm: number;
 }
 
+export interface SmoothPlaybackClock {
+  anchorMediaUs: number | null;
+  anchorSampleMs: number;
+  playbackRate: number;
+}
+
 const KARAOKE_COUNTDOWN_US = 3_000_000;
+const PLAYBACK_CLOCK_REANCHOR_US = 90_000;
+const PLAYBACK_CLOCK_SOFT_DRIFT_US = 25_000;
+export const KARAOKE_PREVIEW_WIDTH = 1_920;
+export const KARAOKE_PREVIEW_HEIGHT = 1_080;
+export const KARAOKE_PREVIEW_FPS = 120;
+
+/** Snap a playback timestamp to the exact frame grid used by 1080p120 export. */
+export function previewFrameTimeUs(nowUs: number): number {
+  const frameIndex = Math.floor(Math.max(0, nowUs) * KARAOKE_PREVIEW_FPS / 1_000_000);
+  return Math.round(frameIndex * 1_000_000 / KARAOKE_PREVIEW_FPS);
+}
+
+/** Move by one native Preview frame without accumulating 8,333 µs rounding drift. */
+export function stepPreviewFrameTimeUs(nowUs: number, direction: -1 | 1): number {
+  const currentFrame = Math.round(Math.max(0, nowUs) * KARAOKE_PREVIEW_FPS / 1_000_000);
+  const nextFrame = Math.max(0, currentFrame + direction);
+  return Math.round(nextFrame * 1_000_000 / KARAOKE_PREVIEW_FPS);
+}
+
+/**
+ * Extrapolate a display clock between decoded source-video frames. A 30 fps
+ * source can otherwise make a 60/120 Hz Karaoke sweep visibly repeat frames.
+ */
+export function smoothedPlaybackTimeUs(
+  clock: SmoothPlaybackClock,
+  rawMediaUs: number,
+  sampleMs: number,
+  playbackRate: number,
+  reset = false,
+): number {
+  const safeRate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
+  const reanchor = () => {
+    clock.anchorMediaUs = rawMediaUs;
+    clock.anchorSampleMs = sampleMs;
+    clock.playbackRate = safeRate;
+    return Math.max(0, Math.round(rawMediaUs));
+  };
+  if (
+    reset
+    || clock.anchorMediaUs === null
+    || Math.abs(clock.playbackRate - safeRate) > 0.0001
+  ) return reanchor();
+  let predictedUs = clock.anchorMediaUs
+    + (sampleMs - clock.anchorSampleMs) * 1_000 * safeRate;
+  const driftUs = rawMediaUs - predictedUs;
+  if (Math.abs(driftUs) > PLAYBACK_CLOCK_REANCHOR_US) return reanchor();
+  if (Math.abs(driftUs) > PLAYBACK_CLOCK_SOFT_DRIFT_US) {
+    const correctionUs = driftUs * 0.04;
+    clock.anchorMediaUs += correctionUs;
+    predictedUs += correctionUs;
+  }
+  return Math.max(0, Math.round(predictedUs));
+}
 
 export function karaokeCountdownCue(
   timeline: Timeline,
@@ -518,6 +577,8 @@ export function karaokeVisibleLineIndexes(timeline: Timeline, nowUs: number): nu
 export function highlightPercent(line: LineTiming, nowUs: number): number {
   if (nowUs <= line.start_us) return 0;
   if (nowUs >= line.end_us) return 100;
+  const cinematicProgress = cinematicLineProgressPpm(line, nowUs);
+  if (cinematicProgress !== null) return cinematicProgress / 10_000;
   const curve = line.tokens.find(
     (token) => token.sweep && token.start_us <= nowUs && nowUs <= token.end_us,
   )?.sweep;
@@ -575,6 +636,98 @@ export function evaluateDisplaySweepPpm(curve: SweepCurveV1, nowUs: number): num
   );
   const acoustic = evaluateSweepPpm(curve, nowUs);
   return Math.round((acoustic + linear * 3) / 4);
+}
+
+function monotoneTangents(points: Array<[number, number]>): number[] {
+  if (points.length === 2) {
+    const slope = (points[1][1] - points[0][1]) / Math.max(1, points[1][0] - points[0][0]);
+    return [slope, slope];
+  }
+  const intervals = points.slice(1).map((point, index) => point[0] - points[index][0]);
+  const slopes = intervals.map((interval, index) => (
+    (points[index + 1][1] - points[index][1]) / Math.max(1, interval)
+  ));
+  const tangents = Array<number>(points.length).fill(0);
+  const endpointTangent = (
+    firstInterval: number,
+    secondInterval: number,
+    firstSlope: number,
+    secondSlope: number,
+  ) => {
+    const tangent = (
+      (2 * firstInterval + secondInterval) * firstSlope - firstInterval * secondSlope
+    ) / (firstInterval + secondInterval);
+    if (tangent * firstSlope <= 0) return 0;
+    if (firstSlope * secondSlope < 0 && Math.abs(tangent) > Math.abs(3 * firstSlope)) {
+      return 3 * firstSlope;
+    }
+    return tangent;
+  };
+  tangents[0] = endpointTangent(intervals[0], intervals[1], slopes[0], slopes[1]);
+  tangents[tangents.length - 1] = endpointTangent(
+    intervals.at(-1)!, intervals.at(-2)!, slopes.at(-1)!, slopes.at(-2)!,
+  );
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const before = slopes[index - 1];
+    const after = slopes[index];
+    if (before <= 0 || after <= 0) continue;
+    const beforeInterval = intervals[index - 1];
+    const afterInterval = intervals[index];
+    const firstWeight = 2 * afterInterval + beforeInterval;
+    const secondWeight = afterInterval + 2 * beforeInterval;
+    tangents[index] = (firstWeight + secondWeight)
+      / (firstWeight / before + secondWeight / after);
+  }
+  return tangents;
+}
+
+function evaluateMonotonePathPpm(points: Array<[number, number]>, nowUs: number): number {
+  if (nowUs <= points[0][0]) return points[0][1];
+  if (nowUs >= points.at(-1)![0]) return points.at(-1)![1];
+  let right = 1;
+  while (right < points.length && points[right][0] <= nowUs) right += 1;
+  const left = right - 1;
+  const [startTime, startProgress] = points[left];
+  const [endTime, endProgress] = points[right];
+  const duration = Math.max(1, endTime - startTime);
+  const position = (nowUs - startTime) / duration;
+  const squared = position * position;
+  const cubed = squared * position;
+  const tangents = monotoneTangents(points);
+  const progress = (
+    (2 * cubed - 3 * squared + 1) * startProgress
+    + (cubed - 2 * squared + position) * duration * tangents[left]
+    + (-2 * cubed + 3 * squared) * endProgress
+    + (cubed - squared) * duration * tangents[right]
+  );
+  return Math.round(Math.max(startProgress, Math.min(endProgress, progress)));
+}
+
+/**
+ * Build one continuous professional display path from analyzed word endpoints.
+ * Internal CTC micro-points may be jagged after re-analysis; token boundaries
+ * stay exact while monotone cubic interpolation removes the visible speed jumps.
+ */
+export function cinematicLineProgressPpm(line: LineTiming, nowUs: number): number | null {
+  if (!line.tokens.length || line.tokens.some((token) => !token.sweep)) return null;
+  const points: Array<[number, number]> = [];
+  for (const token of line.tokens) {
+    const sweep = token.sweep!;
+    for (const point of [sweep.points[0], sweep.points.at(-1)!]) {
+      const previous = points.at(-1);
+      if (previous?.[0] === point.time_us) {
+        if (previous[1] !== point.line_progress_ppm) return null;
+        continue;
+      }
+      if (
+        previous
+        && (point.time_us < previous[0] || point.line_progress_ppm < previous[1])
+      ) return null;
+      points.push([point.time_us, point.line_progress_ppm]);
+    }
+  }
+  if (points.length < 2) return null;
+  return evaluateMonotonePathPpm(points, nowUs);
 }
 
 export function tokenDisplaySegments(line: LineTiming): TokenDisplaySegment[] {

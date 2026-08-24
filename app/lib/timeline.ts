@@ -474,6 +474,41 @@ export function activeLineAt(timeline: Timeline, nowUs: number): number | null {
   return index >= 0 ? index : null;
 }
 
+export const KARAOKE_NEXT_LINE_LEAD_US = 4_500_000;
+export const KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000;
+export const KARAOKE_INSTRUMENTAL_LEAD_US = 1_500_000;
+
+function karaokeNextLineLeadUs(timeline: Timeline, nextIndex: number): number {
+  if (nextIndex <= 0) return KARAOKE_NEXT_LINE_LEAD_US;
+  const gapUs = timeline.lines[nextIndex].start_us - timeline.lines[nextIndex - 1].end_us;
+  return gapUs >= KARAOKE_INSTRUMENTAL_GAP_US
+    ? KARAOKE_INSTRUMENTAL_LEAD_US
+    : KARAOKE_NEXT_LINE_LEAD_US;
+}
+
+export function karaokeVisibleLineIndexes(timeline: Timeline, nowUs: number): number[] {
+  const active = activeLineAt(timeline, nowUs);
+  if (active !== null) {
+    const result = [active];
+    const next = timeline.lines[active + 1];
+    if (
+      next
+      && next.start_us - nowUs <= karaokeNextLineLeadUs(timeline, active + 1)
+    ) {
+      result.push(active + 1);
+    }
+    return result;
+  }
+  const upcoming = timeline.lines.findIndex((line) => line.start_us > nowUs);
+  if (
+    upcoming >= 0
+    && timeline.lines[upcoming].start_us - nowUs <= karaokeNextLineLeadUs(timeline, upcoming)
+  ) {
+    return [upcoming];
+  }
+  return [];
+}
+
 export function highlightPercent(line: LineTiming, nowUs: number): number {
   if (nowUs <= line.start_us) return 0;
   if (nowUs >= line.end_us) return 100;

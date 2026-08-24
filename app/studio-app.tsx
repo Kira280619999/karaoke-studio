@@ -42,6 +42,7 @@ import {
   insertTimelineLine,
   insertTimelineToken,
   karaokeCountdownCue,
+  karaokeVisibleLineIndexes,
   manualLineReplayRange,
   manualTransitionReplayRange,
   manualTokenLoopRange,
@@ -1443,14 +1444,11 @@ function KaraokeOverlay({
   const structureNowUs = useKaraokeOverlayClock(timeline, mediaRef, nowUs, playing);
   const active = activeLineAt(timeline, structureNowUs);
   const countdown = karaokeCountdownCue(timeline, structureNowUs);
-  const rows: { line: LineTiming; active: boolean; lane: number }[] = [];
-  if (active !== null) {
-    rows.push({ line: timeline.lines[active], active: true, lane: active % 2 });
-    if (timeline.lines[active + 1]) rows.push({ line: timeline.lines[active + 1], active: false, lane: (active + 1) % 2 });
-  } else {
-    const upcoming = timeline.lines.findIndex((line) => line.start_us > structureNowUs);
-    if (upcoming >= 0 && timeline.lines[upcoming].start_us - structureNowUs < 4_500_000) rows.push({ line: timeline.lines[upcoming], active: false, lane: upcoming % 2 });
-  }
+  const rows = karaokeVisibleLineIndexes(timeline, structureNowUs).map((index) => ({
+    line: timeline.lines[index],
+    active: index === active,
+    lane: index % 2,
+  }));
   const selectedFont = karaokeFontId(timeline.metadata);
   const selectedColor = karaokeColorId(timeline.metadata);
   return (
@@ -1492,13 +1490,14 @@ function KaraokeOverlay({
 function karaokeOverlayStateKey(timeline: Timeline, nowUs: number): string {
   const active = activeLineAt(timeline, nowUs);
   const countdown = karaokeCountdownCue(timeline, nowUs);
-  if (active !== null) return `active:${timeline.lines[active].id}`;
-  if (countdown) return `countdown:${countdown.nextLineId}:${countdown.number}`;
-  const upcoming = timeline.lines.findIndex((line) => line.start_us > nowUs);
-  if (upcoming >= 0 && timeline.lines[upcoming].start_us - nowUs < 4_500_000) {
-    return `upcoming:${timeline.lines[upcoming].id}`;
-  }
-  return 'empty';
+  const visible = karaokeVisibleLineIndexes(timeline, nowUs)
+    .map((index) => timeline.lines[index].id)
+    .join(',');
+  return [
+    `active:${active === null ? 'none' : timeline.lines[active].id}`,
+    `visible:${visible || 'none'}`,
+    `countdown:${countdown ? `${countdown.nextLineId}:${countdown.number}` : 'none'}`,
+  ].join('|');
 }
 
 function useKaraokeOverlayClock(

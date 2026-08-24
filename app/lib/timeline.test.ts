@@ -13,6 +13,7 @@ import {
   insertTimelineLine,
   insertTimelineToken,
   karaokeCountdownCue,
+  karaokeVisibleLineIndexes,
   lyricFitScale,
   manualLineReplayRange,
   manualTransitionReplayRange,
@@ -82,6 +83,48 @@ test('Karaoke countdown exposes 3-2-1 only in the final three seconds of a real 
   assert.equal(karaokeCountdownCue(countdownTimeline, 4_100_000)?.number, 1);
   assert.equal(karaokeCountdownCue(countdownTimeline, 5_000_000), null);
   assert.equal(karaokeCountdownCue(timeline, 500_000), null);
+});
+
+test('next lyric stays hidden through a long instrumental gap until its lead window', () => {
+  const first = structuredClone(line);
+  first.end_us = 3_000_000;
+  first.tokens.at(-1)!.end_us = 3_000_000;
+  const second = structuredClone(line);
+  second.id = 'line-2';
+  second.start_us = 10_000_000;
+  second.end_us = 12_000_000;
+  second.tokens.forEach((token) => {
+    token.id = `line-2-${token.id}`;
+    token.start_us += 9_000_000;
+    token.end_us += 9_000_000;
+  });
+  const gapTimeline = {
+    ...structuredClone(timeline),
+    duration_us: 12_000_000,
+    lines: [first, second],
+  };
+
+  assert.deepEqual(karaokeVisibleLineIndexes(gapTimeline, 2_000_000), [0]);
+  assert.deepEqual(karaokeVisibleLineIndexes(gapTimeline, 5_000_000), []);
+  assert.deepEqual(karaokeVisibleLineIndexes(gapTimeline, 5_500_000), []);
+  assert.deepEqual(karaokeVisibleLineIndexes(gapTimeline, 8_500_000), [1]);
+  assert.deepEqual(karaokeVisibleLineIndexes(gapTimeline, 10_500_000), [1]);
+});
+
+test('ordinary short transitions keep the next lyric ready while the current line sings', () => {
+  const first = structuredClone(line);
+  first.end_us = 3_000_000;
+  const second = structuredClone(line);
+  second.id = 'line-2';
+  second.start_us = 3_500_000;
+  second.end_us = 5_500_000;
+  const shortTransition = {
+    ...structuredClone(timeline),
+    duration_us: 5_500_000,
+    lines: [first, second],
+  };
+
+  assert.deepEqual(karaokeVisibleLineIndexes(shortTransition, 2_000_000), [0, 1]);
 });
 
 test('whole-song roll maps integer microseconds to monotonic pixels', () => {

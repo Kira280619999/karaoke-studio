@@ -10,6 +10,7 @@ from karaoke_studio.rendering import (
     RenderPreset,
     karaoke_countdown_number,
     resolve_preset,
+    visible_karaoke_rows,
 )
 
 
@@ -20,6 +21,31 @@ def test_countdown_uses_the_final_three_seconds_of_a_real_lyric_gap() -> None:
     assert karaoke_countdown_number(0, 5_000_000, 4_100_000) == 1
     assert karaoke_countdown_number(0, 5_000_000, 5_000_000) is None
     assert karaoke_countdown_number(0, 2_900_000, 100_000) is None
+
+
+def test_next_lyric_waits_until_the_final_lead_window_of_an_instrumental_gap() -> None:
+    timeline = parse_lrc(
+        "[00:01.00]Quyền bính tay Cha hằng đưa dắt con\n"
+        "[00:10.00]Tại nơi sợ hãi buồn lo vây quanh mình",
+        duration_us=13_000_000,
+    )
+    timeline.lines[0].end_us = 3_000_000
+
+    assert visible_karaoke_rows(timeline, 2_000_000) == [(0, True)]
+    assert visible_karaoke_rows(timeline, 5_000_000) == []
+    assert visible_karaoke_rows(timeline, 5_500_000) == []
+    assert visible_karaoke_rows(timeline, 8_500_000) == [(1, False)]
+    assert visible_karaoke_rows(timeline, 10_500_000) == [(1, True)]
+
+
+def test_short_transition_keeps_next_lyric_ready_while_current_line_sings() -> None:
+    timeline = parse_lrc(
+        "[00:01.00]Câu đang hát\n[00:03.50]Câu kế tiếp",
+        duration_us=6_000_000,
+    )
+    timeline.lines[0].end_us = 3_000_000
+
+    assert visible_karaoke_rows(timeline, 2_000_000) == [(0, True), (1, False)]
 
 
 def test_continuous_highlight_never_moves_backward(test_settings) -> None:

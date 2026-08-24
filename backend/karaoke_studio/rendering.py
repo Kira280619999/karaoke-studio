@@ -22,6 +22,9 @@ PREVIEW = (215, 222, 231, 235)
 INK = (0, 0, 0, 225)
 KARAOKE_SHADOW = (5, 16, 59, 245)
 KARAOKE_COUNTDOWN_US = 3_000_000
+KARAOKE_NEXT_LINE_LEAD_US = 4_500_000
+KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000
+KARAOKE_INSTRUMENTAL_LEAD_US = 1_500_000
 
 
 def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int) -> int | None:
@@ -35,6 +38,45 @@ def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int)
     ):
         return None
     return max(1, min(3, math.ceil(until_us / 1_000_000)))
+
+
+def visible_karaoke_rows(timeline: TimelineV1, now_us: int) -> list[tuple[int, bool]]:
+    def lead_us(next_index: int) -> int:
+        if next_index <= 0:
+            return KARAOKE_NEXT_LINE_LEAD_US
+        gap_us = timeline.lines[next_index].start_us - timeline.lines[next_index - 1].end_us
+        return (
+            KARAOKE_INSTRUMENTAL_LEAD_US
+            if gap_us >= KARAOKE_INSTRUMENTAL_GAP_US
+            else KARAOKE_NEXT_LINE_LEAD_US
+        )
+
+    active = next(
+        (
+            index
+            for index, line in enumerate(timeline.lines)
+            if line.start_us <= now_us < line.end_us
+        ),
+        None,
+    )
+    if active is not None:
+        rows = [(active, True)]
+        if (
+            active + 1 < len(timeline.lines)
+            and timeline.lines[active + 1].start_us - now_us <= lead_us(active + 1)
+        ):
+            rows.append((active + 1, False))
+        return rows
+    upcoming = next(
+        (index for index, line in enumerate(timeline.lines) if line.start_us > now_us),
+        None,
+    )
+    if (
+        upcoming is not None
+        and timeline.lines[upcoming].start_us - now_us <= lead_us(upcoming)
+    ):
+        return [(upcoming, False)]
+    return []
 
 
 @dataclass(frozen=True)
@@ -199,42 +241,26 @@ class KaraokeRenderer:
 
     def frame(self, now_us: int) -> Image.Image:
         frame = Image.new("RGBA", (self.width, self.overlay_height), (0, 0, 0, 0))
-        active = next(
-            (
-                index
-                for index, line in enumerate(self.timeline.lines)
-                if line.start_us <= now_us < line.end_us
-            ),
-            None,
-        )
-        rows: list[tuple[int, bool]] = []
+        rows = visible_karaoke_rows(self.timeline, now_us)
         countdown: tuple[int, int] | None = None
-        if active is not None:
-            rows.append((active, True))
-            if active + 1 < len(self.timeline.lines):
-                rows.append((active + 1, False))
-        else:
+        if not any(is_active for _index, is_active in rows):
             upcoming = next(
                 (index for index, line in enumerate(self.timeline.lines) if line.start_us > now_us),
                 None,
             )
             if upcoming is not None:
-                previous_ended = upcoming > 0 and now_us >= self.timeline.lines[upcoming - 1].end_us
-                first_lead = upcoming == 0 and self.timeline.lines[0].start_us - now_us <= 4_500_000
-                if previous_ended or first_lead:
-                    rows.append((upcoming, False))
-                    gap_start = 0 if upcoming == 0 else self.timeline.lines[upcoming - 1].end_us
-                    countdown_number = karaoke_countdown_number(
-                        gap_start,
-                        self.timeline.lines[upcoming].start_us,
-                        now_us,
+                gap_start = 0 if upcoming == 0 else self.timeline.lines[upcoming - 1].end_us
+                countdown_number = karaoke_countdown_number(
+                    gap_start,
+                    self.timeline.lines[upcoming].start_us,
+                    now_us,
+                )
+                if self.countdown and countdown_number is not None:
+                    upcoming_lane = upcoming % 2
+                    countdown = (
+                        countdown_number,
+                        self.lane_y[1 - upcoming_lane],
                     )
-                    if self.countdown and countdown_number is not None:
-                        upcoming_lane = upcoming % 2
-                        countdown = (
-                            countdown_number,
-                            self.lane_y[1 - upcoming_lane],
-                        )
         for index, is_active in rows:
             self._composite_line(frame, index, is_active, now_us)
         if countdown:

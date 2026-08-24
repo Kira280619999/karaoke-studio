@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Keep Vietnamese paths and test output deterministic on Windows, where the
+  # process code page is not guaranteed to be UTF-8.
+  PYTHONUTF8: '1'
+
+jobs:
+  quality:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - name: Install FFmpeg (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install Python environment
+        run: uv sync --frozen --dev
+      - name: Install web environment
+        run: pnpm install --frozen-lockfile
+      - name: Production dependency audit
+        run: pnpm audit --prod --audit-level high
+      - name: Python lint
+        run: uv run ruff check backend
+      - name: API and synthetic render tests
+        run: uv run pytest -q
+      - name: Web lint
+        run: pnpm run lint
+      - name: Type check
+        run: pnpm run typecheck
+      - name: Timeline interaction tests
+        run: pnpm run test:web
+      - name: Production web build
+        run: pnpm run build
+
+  windows-optional-runtime:
+    name: windows-latest / optional AI runtime
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # The smoke test must prove that the runtime installs and starts without
+      # silently downloading any model/checkpoint data.
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Install all Python runtime profiles
+        run: uv sync --frozen --dev --extra quality --extra alignment
+      - name: Smoke-test Windows AI and media runtime (offline)
+        run: uv run python .github/scripts/windows_optional_runtime_smoke.py
+      - name: Run full backend suite with optional runtimes installed
+        run: uv run pytest -q

@@ -17,6 +17,12 @@ import {
 
 import { API_BASE, ApiError, api, assetUrl } from './lib/api';
 import {
+  BATCH_PROCESS_CONCURRENCY,
+  mapWithConcurrency,
+  MAX_BATCH_SONGS,
+  pairBatchFiles,
+} from './lib/batch-import';
+import {
   backgroundMotionFrame,
   backgroundSceneProgress,
   legacyBackgroundPlan,
@@ -101,6 +107,28 @@ interface WorkspaceData {
   artifacts: Artifact[];
   backgroundPlan: BackgroundPlanV1 | null;
   waveform: WaveformPayload | null;
+}
+
+type ImportMode = 'single' | 'batch';
+type BatchSongStatus =
+  | 'ready'
+  | 'uploading'
+  | 'queued'
+  | 'processing'
+  | 'complete'
+  | 'failed';
+
+interface BatchSongDraft {
+  id: string;
+  video: File;
+  timeline: File | null;
+  title: string;
+  artist: string;
+  status: BatchSongStatus;
+  progress: number;
+  message: string;
+  projectId?: string;
+  error?: string;
 }
 
 type AutosaveStatus = 'saved' | 'pending' | 'saving' | 'error';
@@ -393,6 +421,10 @@ export default function StudioApp() {
                 });
                 watchJob(response.job);
               }}
+              onProjectsChanged={async () => {
+                await refreshProjects();
+              }}
+              onOpenProject={selectProject}
               onError={setError}
             />
           ) : !workspace ? (
@@ -418,25 +450,184 @@ function CreateProject({
   capabilities,
   busy,
   onCreated,
+  onProjectsChanged,
+  onOpenProject,
   onError,
 }: {
   capabilities: Capabilities | null;
   busy: boolean;
   onCreated: (project: Project, acceptModelLicense: boolean) => Promise<void>;
+  onProjectsChanged: () => Promise<void>;
+  onOpenProject: (projectId: string) => void;
   onError: (message: string | null) => void;
 }) {
+  const [importMode, setImportMode] = useState<ImportMode>('single');
   const [submitting, setSubmitting] = useState(false);
   const [videoName, setVideoName] = useState('');
   const [timelineFileName, setTimelineFileName] = useState('');
   const [timelineText, setTimelineText] = useState('');
+  const [batchVideos, setBatchVideos] = useState<File[]>([]);
+  const [batchTimelines, setBatchTimelines] = useState<File[]>([]);
+  const [batchSongs, setBatchSongs] = useState<BatchSongDraft[]>([]);
   const [backgroundMode, setBackgroundMode] = useState<'original' | 'custom'>('original');
   const [backgroundFiles, setBackgroundFiles] = useState<File[]>([]);
   const [karaokeFont, setKaraokeFont] = useState<KaraokeFontId>('noto_sans');
   const [karaokeColor, setKaraokeColor] = useState<KaraokeColorId>('yellow');
   const [acceptModelLicense, setAcceptModelLicense] = useState(false);
 
+  const rebuildBatchSongs = (videos: File[], timelines: File[]) => {
+    const previous = new Map(batchSongs.map((song) => [song.id, song]));
+    const next = pairBatchFiles(videos, timelines).map((pair) => {
+      const saved = previous.get(pair.id);
+      return {
+        id: pair.id,
+        video: pair.video,
+        timeline: pair.timeline,
+        title: saved?.title ?? pair.suggestedTitle,
+        artist: saved?.artist ?? '',
+        status: 'ready' as const,
+        progress: 0,
+        message: pair.timeline ? 'Sẵn sàng' : 'Thiếu file timeline',
+      };
+    });
+    setBatchSongs(next);
+  };
+
+  const selectBatchVideos = (files: File[]) => {
+    if (files.length > MAX_BATCH_SONGS) {
+      onError(`Mỗi lượt tối đa ${MAX_BATCH_SONGS} bài để máy chạy ổn định.`);
+    } else {
+      onError(null);
+    }
+    const accepted = files.slice(0, MAX_BATCH_SONGS);
+    setBatchVideos(accepted);
+    rebuildBatchSongs(accepted, batchTimelines);
+  };
+
+  const selectBatchTimelines = (files: File[]) => {
+    if (files.length > MAX_BATCH_SONGS) {
+      onError(`Mỗi lượt tối đa ${MAX_BATCH_SONGS} timeline để máy chạy ổn định.`);
+    } else {
+      onError(null);
+    }
+    const accepted = files.slice(0, MAX_BATCH_SONGS);
+    setBatchTimelines(accepted);
+    rebuildBatchSongs(batchVideos, accepted);
+  };
+
+  const updateBatchSong = (songId: string, patch: Partial<BatchSongDraft>) => {
+    setBatchSongs((songs) => songs.map((song) => (
+      song.id === songId ? { ...song, ...patch } : song
+    )));
+  };
+
+  const waitForBatchJob = async (initial: Job, songId: string): Promise<Job> => {
+    let current = initial;
+    let temporaryFailures = 0;
+    while (!['COMPLETE', 'FAILED', 'CANCELLED'].includes(current.state)) {
+      updateBatchSong(songId, {
+        status: 'processing',
+        progress: current.progress,
+        message: current.message,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      try {
+        current = await api<Job>(`/api/jobs/${initial.id}`);
+        temporaryFailures = 0;
+      } catch (cause) {
+        temporaryFailures += 1;
+        if (temporaryFailures >= 20) throw cause;
+      }
+    }
+    return current;
+  };
+
+  const submitBatch = async () => {
+    if (!batchSongs.length) {
+      onError('Hãy chọn ít nhất một video cho lô Karaoke.');
+      return;
+    }
+    const incomplete = batchSongs.filter((song) => !song.timeline || !song.title.trim());
+    if (incomplete.length) {
+      onError('Mỗi video cần đúng một file timeline và một tên bài hát.');
+      return;
+    }
+    setSubmitting(true);
+    onError(null);
+    const results = await mapWithConcurrency(
+      batchSongs,
+      BATCH_PROCESS_CONCURRENCY,
+      async (song) => {
+        try {
+          updateBatchSong(song.id, {
+            status: 'uploading',
+            progress: 0.03,
+            message: 'Đang nhập video và timeline…',
+            error: undefined,
+          });
+          const payload = new FormData();
+          payload.set('video', song.video, song.video.name);
+          const timeline = song.timeline;
+          if (!timeline) throw new Error('Thiếu file timeline.');
+          payload.set('lrc', timeline, timeline.name);
+          payload.set('title', song.title.trim());
+          payload.set('artist', song.artist.trim());
+          payload.set('background_mode', 'original');
+          payload.set('karaoke_font', karaokeFont);
+          payload.set('karaoke_color', karaokeColor);
+          const project = await api<Project>('/api/projects', { method: 'POST', body: payload });
+          updateBatchSong(song.id, {
+            status: 'queued',
+            progress: 0.06,
+            message: 'Đã nhập · đang xếp hàng phân tích',
+            projectId: project.id,
+          });
+          await onProjectsChanged();
+          const response = await api<{ job: Job }>(`/api/projects/${project.id}/process`, {
+            method: 'POST',
+            body: JSON.stringify({
+              quality: 'highest',
+              alignment_profile: 'maximum',
+              motion_profile: 'vocal_hybrid',
+              accept_vietnamese_model_license: acceptModelLicense,
+            }),
+          });
+          const terminal = await waitForBatchJob(response.job, song.id);
+          if (terminal.state !== 'COMPLETE') {
+            throw new Error(terminal.error || terminal.message || 'Phân tích không hoàn tất.');
+          }
+          updateBatchSong(song.id, {
+            status: 'complete',
+            progress: 1,
+            message: 'Phân tích hoàn tất · sẵn sàng kiểm duyệt',
+            projectId: project.id,
+          });
+          await onProjectsChanged();
+          return project;
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : 'Không thể xử lý bài này.';
+          updateBatchSong(song.id, {
+            status: 'failed',
+            message: 'Cần kiểm tra lại',
+            error: message,
+          });
+          throw cause;
+        }
+      },
+    );
+    const failedCount = results.filter((result) => result.status === 'rejected').length;
+    if (failedCount) {
+      onError(`${batchSongs.length - failedCount}/${batchSongs.length} bài đã hoàn tất; ${failedCount} bài cần kiểm tra lại.`);
+    }
+    setSubmitting(false);
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (importMode === 'batch') {
+      await submitBatch();
+      return;
+    }
     onError(null);
     if (!timelineFileName && !timelineText.trim()) {
       onError('Hãy chọn file timeline hoặc dán nội dung lời có timestamp.');
@@ -467,114 +658,187 @@ function CreateProject({
     }
   };
 
+  const batchHasStarted = batchSongs.some((song) => song.status !== 'ready');
+  const batchIsValid = batchSongs.length > 0 && batchSongs.every(
+    (song) => Boolean(song.timeline && song.title.trim()),
+  );
+
   return (
     <div className="create-view">
       <div className="create-copy">
-        <span className="gold-chip">DỰ ÁN MỚI · TIẾNG VIỆT</span>
-        <h1>Biến video bài hát thành Karaoke chính xác đến từng frame.</h1>
+        <div className="import-mode-switch" role="tablist" aria-label="Chọn số lượng bài Karaoke">
+          <button className={importMode === 'single' ? 'active' : ''} disabled={submitting} type="button" role="tab" aria-selected={importMode === 'single'} onClick={() => setImportMode('single')}>Một bài</button>
+          <button className={importMode === 'batch' ? 'active' : ''} disabled={submitting} type="button" role="tab" aria-selected={importMode === 'batch'} onClick={() => setImportMode('batch')}>Nhiều bài cùng lúc</button>
+        </div>
+        <span className="gold-chip">{importMode === 'batch' ? 'BATCH STUDIO · TỐI ĐA 12 BÀI' : 'DỰ ÁN MỚI · TIẾNG VIỆT'}</span>
+        <h1>{importMode === 'batch' ? 'Làm nhiều bài Karaoke trong cùng một lượt.' : 'Biến video bài hát thành Karaoke chính xác đến từng frame.'}</h1>
         <p>
-          Tách giọng, căn từng âm tiết và đưa mọi timing chưa chắc chắn vào hàng
-          kiểm duyệt trước khi xuất Final.
+          {importMode === 'batch'
+            ? 'Tự ghép video với timeline, chạy hai bài song song và xếp hàng phần còn lại để máy luôn ổn định.'
+            : 'Tách giọng, căn từng âm tiết và đưa mọi timing chưa chắc chắn vào hàng kiểm duyệt trước khi xuất Final.'}
         </p>
         <div className="default-spec">
-          <span>OUTPUT</span><strong>1080p · 120fps</strong>
-          <small>Hai dòng cố định · quét liên tục · AAC 48 kHz</small>
+          <span>{importMode === 'batch' ? 'BATCH' : 'OUTPUT'}</span><strong>{importMode === 'batch' ? '2 bài xử lý song song' : '1080p · 120fps'}</strong>
+          <small>{importMode === 'batch' ? 'Các bài còn lại tự xếp hàng · giữ video gốc' : 'Hai dòng cố định · quét liên tục · AAC 48 kHz'}</small>
         </div>
       </div>
 
-      <form className="create-form" onSubmit={submit}>
-        <div className="form-heading"><span>01</span><div><small>NHẬP NGUỒN</small><h2>Bắt đầu một bản Karaoke</h2></div></div>
-        <label className={`file-drop ${videoName ? 'selected' : ''}`}>
-          <input
-            required
-            type="file"
-            name="video"
-            accept="video/mp4,video/quicktime,video/x-matroska,video/webm"
-            onChange={(event) => setVideoName(event.target.files?.[0]?.name ?? '')}
-          />
-          <span className="upload-symbol">↑</span>
-          <strong>{videoName || 'Chọn hoặc thả video MP4'}</strong>
-          <small>Nguồn được checksum và giữ nguyên, không rời khỏi máy.</small>
-        </label>
-        <section className="timeline-source" aria-labelledby="timeline-source-title">
-          <div className="timeline-source-heading">
-            <span>TXT</span>
-            <div>
-              <strong id="timeline-source-title">Nguồn timeline lời bài hát</strong>
-              <small>LRC · SRT · VTT · TXT timestamp</small>
-            </div>
-            <b>CHỌN 1 NGUỒN</b>
-          </div>
-          <label className={`timeline-file ${timelineFileName ? 'selected' : ''}`}>
-            <input
-              type="file"
-              name="lrc"
-              accept=".lrc,.srt,.vtt,.txt,text/plain,application/x-subrip,text/vtt"
-              onChange={(event) => setTimelineFileName(event.target.files?.[0]?.name ?? '')}
-            />
-            <span>{timelineFileName || 'Chọn hoặc thả file LRC / SRT / VTT / TXT'}</span>
-            <b>{timelineFileName ? 'Đổi file' : 'Mở file'}</b>
-          </label>
-          <div className="timeline-source-divider"><span>HOẶC DÁN TRỰC TIẾP</span></div>
-          <label className="timeline-paste">
-            <span>Dán nguyên văn timestamp và lời bài hát</span>
-            <textarea
-              name="timeline_text"
-              value={timelineText}
-              onChange={(event) => setTimelineText(event.target.value)}
-              placeholder={'[00:12.50] Lời bài hát\n[00:18.20] Dòng tiếp theo\n\nHoặc dán nguyên khối SRT / WebVTT'}
-              rows={5}
-              spellCheck={false}
-            />
-          </label>
-          <p>Hệ thống giữ nguyên lời bạn nhập; AI chỉ dùng âm thanh để căn timing.</p>
-        </section>
-        <div className="form-row">
-          <label><span>Tên bài hát</span><input name="title" placeholder="Tự lấy từ tên video nếu để trống" /></label>
-          <label><span>Ca sĩ / nguồn</span><input name="artist" placeholder="Không bắt buộc" /></label>
-        </div>
-        <KaraokeFontPicker value={karaokeFont} onChange={setKaraokeFont} />
-        <KaraokeColorPicker value={karaokeColor} onChange={setKaraokeColor} />
-        <fieldset className="background-choice">
-          <legend>Hình ảnh đầu ra</legend>
-          <label><input type="radio" checked={backgroundMode === 'original'} onChange={() => setBackgroundMode('original')} /><span><strong>Giữ video gốc</strong><small>Thay audio bằng instrumental</small></span></label>
-          <label><input type="radio" checked={backgroundMode === 'custom'} onChange={() => setBackgroundMode('custom')} /><span><strong>Nền thay thế tự động</strong><small>Một hoặc nhiều ảnh/video</small></span></label>
-        </fieldset>
-        {backgroundMode === 'custom' && (
-          <div className={`background-library ${backgroundFiles.length ? 'selected' : ''}`}>
-            <label className="background-upload">
-              <span className="background-upload-icon">＋</span>
-              <span>
-                <strong>{backgroundFiles.length ? `${backgroundFiles.length} cảnh đã chọn` : 'Chọn nhiều ảnh hoặc video'}</strong>
-                <small>Giữ ⌘ hoặc Shift để chọn nhiều file cùng lúc · tối đa 64 cảnh</small>
-              </span>
-              <b>{backgroundFiles.length ? 'Chọn lại' : 'Mở thư viện'}</b>
+      <form className={`create-form ${importMode === 'batch' ? 'is-batch' : ''}`} onSubmit={submit}>
+        <div className="form-heading"><span>01</span><div><small>{importMode === 'batch' ? 'NHẬP HÀNG LOẠT' : 'NHẬP NGUỒN'}</small><h2>{importMode === 'batch' ? 'Chuẩn bị nhiều bản Karaoke' : 'Bắt đầu một bản Karaoke'}</h2></div></div>
+        {importMode === 'single' ? (
+          <>
+            <label className={`file-drop ${videoName ? 'selected' : ''}`}>
               <input
                 required
-                multiple
                 type="file"
-                name="background"
-                accept="video/*,image/jpeg,image/png,image/webp,image/bmp,image/tiff"
-                onChange={(event) => setBackgroundFiles(Array.from(event.target.files ?? []))}
+                name="video"
+                accept="video/mp4,video/quicktime,video/x-matroska,video/webm"
+                onChange={(event) => setVideoName(event.target.files?.[0]?.name ?? '')}
               />
+              <span className="upload-symbol">↑</span>
+              <strong>{videoName || 'Chọn hoặc thả video MP4'}</strong>
+              <small>Nguồn được checksum và giữ nguyên, không rời khỏi máy.</small>
             </label>
-            {backgroundFiles.length > 0 && (
-              <div className="background-scene-list" aria-label="Danh sách cảnh nền đã chọn">
-                {backgroundFiles.map((file, index) => (
-                  <span key={`${file.name}-${file.lastModified}-${index}`} title={file.name}>
-                    <i>{String(index + 1).padStart(2, '0')}</i>
-                    <b>{file.type.startsWith('video/') ? 'VIDEO' : 'ẢNH'}</b>
-                    <em>{file.name}</em>
-                  </span>
+            <section className="timeline-source" aria-labelledby="timeline-source-title">
+              <div className="timeline-source-heading">
+                <span>TXT</span>
+                <div>
+                  <strong id="timeline-source-title">Nguồn timeline lời bài hát</strong>
+                  <small>LRC · SRT · VTT · TXT timestamp</small>
+                </div>
+                <b>CHỌN 1 NGUỒN</b>
+              </div>
+              <label className={`timeline-file ${timelineFileName ? 'selected' : ''}`}>
+                <input
+                  type="file"
+                  name="lrc"
+                  accept=".lrc,.srt,.vtt,.txt,text/plain,application/x-subrip,text/vtt"
+                  onChange={(event) => setTimelineFileName(event.target.files?.[0]?.name ?? '')}
+                />
+                <span>{timelineFileName || 'Chọn hoặc thả file LRC / SRT / VTT / TXT'}</span>
+                <b>{timelineFileName ? 'Đổi file' : 'Mở file'}</b>
+              </label>
+              <div className="timeline-source-divider"><span>HOẶC DÁN TRỰC TIẾP</span></div>
+              <label className="timeline-paste">
+                <span>Dán nguyên văn timestamp và lời bài hát</span>
+                <textarea
+                  name="timeline_text"
+                  value={timelineText}
+                  onChange={(event) => setTimelineText(event.target.value)}
+                  placeholder={'[00:12.50] Lời bài hát\n[00:18.20] Dòng tiếp theo\n\nHoặc dán nguyên khối SRT / WebVTT'}
+                  rows={5}
+                  spellCheck={false}
+                />
+              </label>
+              <p>Hệ thống giữ nguyên lời bạn nhập; AI chỉ dùng âm thanh để căn timing.</p>
+            </section>
+            <div className="form-row">
+              <label><span>Tên bài hát</span><input name="title" placeholder="Tự lấy từ tên video nếu để trống" /></label>
+              <label><span>Ca sĩ / nguồn</span><input name="artist" placeholder="Không bắt buộc" /></label>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="batch-pickers">
+              <label className={`batch-file-picker ${batchVideos.length ? 'selected' : ''}`}>
+                <input
+                  multiple
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/x-matroska,video/webm"
+                  onChange={(event) => selectBatchVideos(Array.from(event.target.files ?? []))}
+                />
+                <span>MP4</span>
+                <div><strong>{batchVideos.length ? `${batchVideos.length} video đã chọn` : 'Chọn nhiều video'}</strong><small>MP4 · MOV · MKV · WEBM</small></div>
+                <b>{batchVideos.length ? 'Chọn lại' : 'Mở video'}</b>
+              </label>
+              <label className={`batch-file-picker ${batchTimelines.length ? 'selected' : ''}`}>
+                <input
+                  multiple
+                  type="file"
+                  accept=".lrc,.srt,.vtt,.txt,text/plain,application/x-subrip,text/vtt"
+                  onChange={(event) => selectBatchTimelines(Array.from(event.target.files ?? []))}
+                />
+                <span>TXT</span>
+                <div><strong>{batchTimelines.length ? `${batchTimelines.length} timeline đã chọn` : 'Chọn nhiều timeline'}</strong><small>LRC · SRT · VTT · TXT</small></div>
+                <b>{batchTimelines.length ? 'Chọn lại' : 'Mở lời'}</b>
+              </label>
+            </div>
+            {batchSongs.length ? (
+              <section className="batch-song-list" aria-label="Danh sách bài Karaoke hàng loạt">
+                <header><div><strong>{batchSongs.length} BÀI TRONG LÔ</strong><small>Tự ghép theo tên file; nếu tên khác nhau sẽ ghép theo thứ tự chọn.</small></div><b>{batchSongs.filter((song) => song.status === 'complete').length}/{batchSongs.length} XONG</b></header>
+                {batchSongs.map((song, index) => (
+                  <article className={`batch-song-row status-${song.status}`} key={song.id} style={{ '--batch-progress': `${Math.round(song.progress * 100)}%` } as CSSProperties}>
+                    <div className="batch-song-index">{String(index + 1).padStart(2, '0')}</div>
+                    <div className="batch-song-source">
+                      <strong title={song.video.name}>{song.video.name}</strong>
+                      <small className={song.timeline ? '' : 'missing'}>{song.timeline?.name ?? 'Chưa ghép được timeline'}</small>
+                    </div>
+                    <label><span>Tên bài hát</span><input aria-label={`Tên bài hát ${index + 1}`} disabled={submitting} type="text" value={song.title} onChange={(event) => updateBatchSong(song.id, { title: event.target.value })} /></label>
+                    <label><span>Ca sĩ / nguồn</span><input aria-label={`Ca sĩ hoặc nguồn ${index + 1}`} disabled={submitting} type="text" value={song.artist} placeholder="Không bắt buộc" onChange={(event) => updateBatchSong(song.id, { artist: event.target.value })} /></label>
+                    <div className="batch-song-state">
+                      <strong>{batchStatusLabel(song.status)}</strong>
+                      <small>{song.error ?? song.message}</small>
+                      {song.projectId && ['complete', 'failed'].includes(song.status) && <button type="button" onClick={() => onOpenProject(song.projectId!)}>Mở dự án</button>}
+                    </div>
+                  </article>
                 ))}
+              </section>
+            ) : (
+              <p className="batch-empty-note">Chọn video và timeline; ứng dụng sẽ tạo một hàng cho từng bài để bạn kiểm tra trước khi chạy.</p>
+            )}
+          </>
+        )}
+        <KaraokeFontPicker value={karaokeFont} onChange={setKaraokeFont} />
+        <KaraokeColorPicker value={karaokeColor} onChange={setKaraokeColor} />
+        {importMode === 'single' ? (
+          <>
+            <fieldset className="background-choice">
+              <legend>Hình ảnh đầu ra</legend>
+              <label><input type="radio" checked={backgroundMode === 'original'} onChange={() => setBackgroundMode('original')} /><span><strong>Giữ video gốc</strong><small>Thay audio bằng instrumental</small></span></label>
+              <label><input type="radio" checked={backgroundMode === 'custom'} onChange={() => setBackgroundMode('custom')} /><span><strong>Nền thay thế tự động</strong><small>Một hoặc nhiều ảnh/video</small></span></label>
+            </fieldset>
+            {backgroundMode === 'custom' && (
+              <div className={`background-library ${backgroundFiles.length ? 'selected' : ''}`}>
+                <label className="background-upload">
+                  <span className="background-upload-icon">＋</span>
+                  <span>
+                    <strong>{backgroundFiles.length ? `${backgroundFiles.length} cảnh đã chọn` : 'Chọn nhiều ảnh hoặc video'}</strong>
+                    <small>Giữ ⌘ hoặc Shift để chọn nhiều file cùng lúc · tối đa 64 cảnh</small>
+                  </span>
+                  <b>{backgroundFiles.length ? 'Chọn lại' : 'Mở thư viện'}</b>
+                  <input
+                    required
+                    multiple
+                    type="file"
+                    name="background"
+                    accept="video/*,image/jpeg,image/png,image/webp,image/bmp,image/tiff"
+                    onChange={(event) => setBackgroundFiles(Array.from(event.target.files ?? []))}
+                  />
+                </label>
+                {backgroundFiles.length > 0 && (
+                  <div className="background-scene-list" aria-label="Danh sách cảnh nền đã chọn">
+                    {backgroundFiles.map((file, index) => (
+                      <span key={`${file.name}-${file.lastModified}-${index}`} title={file.name}>
+                        <i>{String(index + 1).padStart(2, '0')}</i>
+                        <b>{file.type.startsWith('video/') ? 'VIDEO' : 'ẢNH'}</b>
+                        <em>{file.name}</em>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="background-auto-note"><i>✦</i><span><strong>CHUYỂN CẢNH ĐIỆN ẢNH</strong> Hệ thống ưu tiên khoảng nghỉ/ranh giới câu, dissolve mềm đến 1,8 giây và tạo chuyển động Ken Burns nhẹ để nền luôn sống nhưng không làm phân tâm lời Karaoke.</span></p>
               </div>
             )}
-            <p className="background-auto-note"><i>✦</i><span><strong>CHUYỂN CẢNH ĐIỆN ẢNH</strong> Hệ thống ưu tiên khoảng nghỉ/ranh giới câu, dissolve mềm đến 1,8 giây và tạo chuyển động Ken Burns nhẹ để nền luôn sống nhưng không làm phân tâm lời Karaoke.</span></p>
-          </div>
+          </>
+        ) : (
+          <div className="batch-output-policy"><span>✓</span><div><strong>Mỗi bài giữ video gốc</strong><small>Audio sẽ được thay bằng instrumental sau khi bạn chọn bản tách giọng. Nền riêng có thể chỉnh trong từng project.</small></div></div>
         )}
         <label className="license-check"><input type="checkbox" checked={acceptModelLicense} onChange={(event) => setAcceptModelLicense(event.target.checked)} /><span><strong>Dùng Karaoke AI Maximum Accuracy</strong><small>Hai model × hai vocal stem, CC-BY-NC-4.0 cho mục đích phi thương mại. Nếu bỏ chọn, app vẫn chạy energy fallback nhưng không tự Verified.</small></span></label>
-        <button className="primary-action" disabled={submitting || busy || !capabilities?.ffmpeg} type="submit">
-          {submitting ? 'Đang nhập và khởi động phân tích…' : 'Tạo project và tự phân tích hết bài →'}
+        <button className="primary-action" disabled={submitting || busy || !capabilities?.ffmpeg || (importMode === 'batch' && (!batchIsValid || batchHasStarted))} type="submit">
+          {submitting
+            ? importMode === 'batch' ? `Đang xử lý ${batchSongs.length} bài · tối đa 2 bài song song…` : 'Đang nhập và khởi động phân tích…'
+            : importMode === 'batch' ? batchHasStarted ? 'Lô này đã chạy · chọn file mới để tạo lô khác' : `Tạo và xử lý ${batchSongs.length || 0} bài →`
+              : 'Tạo project và tự phân tích hết bài →'}
         </button>
         <p className="privacy-note"><span /> Server chỉ lắng nghe tại 127.0.0.1 · không telemetry · không cloud upload</p>
       </form>
@@ -2793,6 +3057,18 @@ function stateLabel(state: Project['state']): string {
     FAILED: 'Cần xử lý lỗi',
   };
   return labels[state];
+}
+
+function batchStatusLabel(status: BatchSongStatus): string {
+  const labels: Record<BatchSongStatus, string> = {
+    ready: 'Sẵn sàng',
+    uploading: 'Đang nhập',
+    queued: 'Đang xếp hàng',
+    processing: 'Đang phân tích',
+    complete: 'Hoàn tất',
+    failed: 'Có lỗi',
+  };
+  return labels[status];
 }
 
 function transitionGapLabel(deltaUs: number): string {

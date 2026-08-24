@@ -212,6 +212,7 @@ def test_1080p120_encoding_has_an_unambiguous_real_time_clock() -> None:
 
 def test_1080p60_is_the_compatible_api_default() -> None:
     assert RenderRequest().preset == "1080p60"
+    assert RenderRequest().expected_instrumental_id is None
 
 
 def test_renderer_uses_timeline_font_and_keeps_wrapped_rows_the_same_size(test_settings) -> None:

@@ -135,6 +135,7 @@ class RenderRequest(BaseModel):
     preset: Literal["1080p120", "1080p60", "1080p30", "source"] = "1080p60"
     countdown: bool = True
     expected_timeline_revision: int | None = Field(default=None, ge=1)
+    expected_instrumental_id: str | None = None
 
 
 class ProcessRequest(BaseModel):

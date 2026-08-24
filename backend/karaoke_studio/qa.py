@@ -124,6 +124,7 @@ def run_final_qa(
     project_dir: Path,
     settings: Settings,
     mode: str,
+    expected_instrumental_id: str | None = None,
 ) -> dict:
     timing_verified = project.state in {ProjectState.VERIFIED, ProjectState.RENDERED}
     timeline_issues = validate_timeline(
@@ -234,6 +235,7 @@ def run_final_qa(
             else "unconfirmed_instrumental"
         ),
         "instrumental_candidate": project.selected_instrumental,
+        "render_bound_instrumental_candidate": expected_instrumental_id,
         "instrumental_confirmed": project.instrumental_confirmed,
         "timing_verified_at_render": timing_verified,
         "advisory_reasons": advisory_reasons,

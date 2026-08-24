@@ -867,34 +867,40 @@ def _background_motion_filter(
     preset: RenderPreset,
     clip_duration_us: int,
 ) -> str:
-    """Return a subtle deterministic Ken Burns move for image and video scenes."""
+    """Return the Preview-equivalent, subpixel Ken Burns move for a scene.
+
+    ``zoompan`` quantizes its crop geometry to whole source pixels.  On a still
+    background at 120 fps that can repeat dozens of adjacent frames even though
+    the stream itself is CFR.  ``perspective`` keeps the crop coordinates as
+    floating point values and resamples every frame, preserving the same smooth
+    scale/translation curve used by the browser Preview.
+    """
     patterns = (
-        (1.035, 1.085, -0.20, 0.20, 0.10, -0.10),
-        (1.085, 1.045, 0.55, -0.55, -0.15, 0.15),
-        (1.045, 1.085, -0.55, 0.55, 0.18, -0.18),
-        (1.090, 1.040, 0.25, -0.25, 0.55, -0.55),
+        (1.035, 1.085, 0.30, -0.30, -0.15, 0.15),
+        (1.085, 1.045, -0.80, 0.80, 0.20, -0.20),
+        (1.045, 1.085, 0.80, -0.80, -0.25, 0.25),
+        (1.090, 1.040, -0.35, 0.35, -0.75, 0.75),
     )
     start_zoom, end_zoom, start_x, end_x, start_y, end_y = patterns[
         abs(scene_index) % len(patterns)
     ]
-    total_frames = max(
-        2,
-        math.ceil(
-            clip_duration_us
-            * preset.fps_numerator
-            / (1_000_000 * preset.fps_denominator)
-        ),
+    progress = (
+        f"in*{1_000_000 * preset.fps_denominator}/"
+        f"{max(1, clip_duration_us * preset.fps_numerator)}"
     )
-    denominator = total_frames - 1
-    progress = f"on/{denominator}"
     zoom = f"{start_zoom:.6f}+({end_zoom - start_zoom:.6f})*{progress}"
-    pan_x = f"{start_x:.6f}+({end_x - start_x:.6f})*{progress}"
-    pan_y = f"{start_y:.6f}+({end_y - start_y:.6f})*{progress}"
-    x = f"(iw-iw/zoom)/2*(1+({pan_x}))"
-    y = f"(ih-ih/zoom)/2*(1+({pan_y}))"
+    translate_x = f"{start_x:.6f}+({end_x - start_x:.6f})*{progress}"
+    translate_y = f"{start_y:.6f}+({end_y - start_y:.6f})*{progress}"
+    crop_x = f"(W-W/({zoom}))/2-(({translate_x})/100*W)/({zoom})"
+    crop_y = f"(H-H/({zoom}))/2-(({translate_y})/100*H)/({zoom})"
+    crop_width = f"W/({zoom})"
+    crop_height = f"H/({zoom})"
     return (
-        f"zoompan=z='{zoom}':x='{x}':y='{y}':d=1:"
-        f"s={preset.width}x{preset.height}:fps={preset.ffmpeg_fps}"
+        f"perspective=x0='{crop_x}':y0='{crop_y}':"
+        f"x1='{crop_x}+{crop_width}':y1='{crop_y}':"
+        f"x2='{crop_x}':y2='{crop_y}+{crop_height}':"
+        f"x3='{crop_x}+{crop_width}':y3='{crop_y}+{crop_height}':"
+        "sense=source:eval=frame:interpolation=cubic"
     )
 
 

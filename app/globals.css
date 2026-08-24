@@ -606,6 +606,13 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .candidate-card button.confirmed { border-color: rgba(106,215,154,.35); color: var(--green); }
 .export-panel select { margin-bottom: 9px; font-size: 9px; }
 .export-preset-warning { margin: -3px 0 9px; padding: 7px 9px; border-left: 2px solid var(--gold); color: var(--gold-soft); background: rgba(242,184,75,.06); font-size: 8px; line-height: 1.45; }
+.export-audio-summary { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; margin: 0 0 9px; padding: 8px 9px; border: 1px solid rgba(242,184,75,.2); border-radius: 7px; background: rgba(242,184,75,.04); }
+.export-audio-summary > span { color: #858a93; font-size: 7px; text-transform: uppercase; letter-spacing: .07em; }
+.export-audio-summary > strong { overflow: hidden; color: #e5e7eb; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.export-audio-summary > small { grid-column: 1/-1; color: #c5a763; font-size: 7px; line-height: 1.4; }
+.export-audio-summary > button { grid-column: 1/-1; min-height: 27px; border: 1px solid rgba(242,184,75,.25); border-radius: 5px; color: var(--gold-soft); background: rgba(242,184,75,.06); font-size: 7px; cursor: pointer; }
+.export-audio-summary.confirmed { border-color: rgba(106,215,154,.22); background: rgba(106,215,154,.035); }
+.export-audio-summary.confirmed > small { color: var(--green); }
 .export-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .export-actions button { min-height: 38px; }
 .final-button { color: #171208 !important; background: var(--gold) !important; }
@@ -970,7 +977,13 @@ button:disabled { opacity: .42; cursor: not-allowed; }
   color: #78dca3 !important;
   background: rgba(89,201,139,.1);
   font-size: 7px;
+  white-space: nowrap;
 }
+.fcp-editor-workspace .mix-audio-badge.is-original {
+  color: #aeb2bb !important;
+  background: rgba(174,178,187,.08);
+}
+.viewer-instrumental-audio { display: none; }
 .fcp-editor-workspace .monitor-stage {
   min-height: 0;
   aspect-ratio: auto;
@@ -1026,6 +1039,21 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .viewer-audio-controls { justify-self: end; display: flex; align-items: center; gap: 6px; }
 .viewer-audio-controls > span { color: #777980; font-size: 8px; }
 .viewer-audio-controls input { width: 70px; accent-color: #0a84ff; }
+.preview-audio-switch { display: flex; align-items: center; overflow: hidden; border: 1px solid #42434a; border-radius: 4px; }
+.viewer-audio-controls .preview-audio-switch button {
+  width: auto;
+  min-width: 42px;
+  height: 21px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 0;
+  color: #7f8289;
+  font: 700 7px var(--font-geist-mono),monospace;
+  letter-spacing: .04em;
+}
+.viewer-audio-controls .preview-audio-switch button + button { border-left: 1px solid #42434a; }
+.viewer-audio-controls .preview-audio-switch button.active { color: #b9f2cf; background: rgba(89,201,139,.14); }
+.viewer-audio-controls .preview-audio-switch button:disabled { color: #55575d; cursor: not-allowed; }
 
 .fcp-editor-workspace > .fcp-inspector {
   grid-area: inspector;
@@ -1118,6 +1146,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .fcp-inspector .export-panel { padding-bottom: 10px; }
 .fcp-inspector .candidate-list,
 .fcp-inspector .export-panel > label,
+.fcp-inspector .export-audio-summary,
 .fcp-inspector .export-actions,
 .fcp-inspector .verification-gate,
 .fcp-inspector .export-list,

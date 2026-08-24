@@ -365,6 +365,19 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
             "Timeline đã thay đổi sau khi xếp hàng render; hãy xuất lại revision mới nhất."
         )
     mode = options.get("mode", "draft")
+    if mode == "final" and not project.instrumental_confirmed:
+        raise RuntimeError(
+            "Instrumental chưa được nghe và xác nhận; không thể xuất Final loại giọng."
+        )
+    expected_instrumental_id = options.get("expected_instrumental_id")
+    if mode == "final" and not expected_instrumental_id:
+        raise RuntimeError(
+            "Job Final thiếu khóa instrumental; hãy tạo lại lượt xuất từ Viewer hiện tại."
+        )
+    if mode == "final" and project.selected_instrumental != expected_instrumental_id:
+        raise RuntimeError(
+            "Instrumental đã đổi sau khi xếp hàng render; hãy nghe lại và xuất Final mới."
+        )
     output = render_video(
         project,
         timeline,
@@ -375,7 +388,17 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         bool(options.get("countdown", True)),
         context.emit,
     )
-    report = run_final_qa(output, project, timeline, store.project_dir(project_id), settings, mode)
+    report = run_final_qa(
+        output,
+        project,
+        timeline,
+        store.project_dir(project_id),
+        settings,
+        mode,
+        expected_instrumental_id=(
+            str(expected_instrumental_id) if mode == "final" else None
+        ),
+    )
     if project.state == ProjectState.RENDERED:
         next_state = ProjectState.RENDERED
     elif project.state == ProjectState.VERIFIED:

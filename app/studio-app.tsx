@@ -53,6 +53,13 @@ import {
   karaokeFontId,
   type KaraokeFontId,
 } from './lib/karaoke-fonts';
+import {
+  preferredPreviewAudioMode,
+  previewAudioNeedsSync,
+  previewWaveformFor,
+  selectedInstrumentalArtifact,
+  type PreviewAudioMode,
+} from './lib/preview-audio';
 import { songCreditOpacity } from './lib/song-credit';
 import {
   activeLineAt,
@@ -930,6 +937,10 @@ function ProjectWorkspace({
 }
 
 function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: WorkspaceData; onReload: () => Promise<void>; onError: (message: string | null) => void; watchJob: (job: Job) => void; job: Job | null }) {
+  const selectedInstrumental = selectedInstrumentalArtifact(
+    data.project.selected_instrumental,
+    data.artifacts,
+  );
   const [timeline, setTimeline] = useState(data.timeline);
   const [issues, setIssues] = useState(data.issues);
   const initialReviewLineId = data.issues.find((issue) => REVIEW_ISSUE_CODES.has(issue.code))?.line_id;
@@ -941,6 +952,9 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const [currentTimeUs, setCurrentTimeUs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewerVolume, setViewerVolume] = useState(1);
+  const [previewAudioMode, setPreviewAudioMode] = useState<PreviewAudioMode>(() => (
+    preferredPreviewAudioMode(data.project.selected_instrumental, data.artifacts)
+  ));
   const [preset, setPreset] = useState<ExportPreset>(DEFAULT_EXPORT_PRESET);
   const [inspectorTab, setInspectorTab] = useState<'review' | 'audio' | 'text' | 'export'>('review');
   const [saving, setSaving] = useState(false);
@@ -949,6 +963,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const [loopRange, setLoopRange] = useState<ManualLoopRange | null>(null);
   const loopRangeRef = useRef<ManualLoopRange | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const instrumentalAudioRef = useRef<HTMLAudioElement>(null);
   const timelineRef = useRef(data.timeline);
   const dirtyRef = useRef(false);
   const editVersionRef = useRef(0);
@@ -961,6 +976,17 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const activeLine = timeline.lines.find((line) => line.id === activeLineId) ?? timeline.lines[0];
   const proxy = data.artifacts.find((artifact) => artifact.id === 'work/proxy.mp4');
   const videoUrl = proxy ? assetUrl(proxy.url) : assetUrl(`/api/projects/${data.project.id}/files/source/${encodeURIComponent(data.project.source_name)}`);
+  const instrumentalUrl = selectedInstrumental ? assetUrl(selectedInstrumental.url) : null;
+  const usingInstrumentalPreview = previewAudioMode === 'instrumental' && Boolean(instrumentalUrl);
+  const selectedInstrumentalName = data.project.selected_instrumental
+    ? data.waveform?.candidates[data.project.selected_instrumental]?.label
+      ?? data.project.selected_instrumental
+    : 'Chưa có instrumental';
+  const previewWaveform = previewWaveformFor(
+    usingInstrumentalPreview ? 'instrumental' : 'original',
+    data.project.selected_instrumental,
+    data.waveform,
+  );
   const activeLineIndex = timeline.lines.findIndex((line) => line.id === activeLine?.id);
   const previousLine = activeLineIndex > 0 ? timeline.lines[activeLineIndex - 1] : null;
   const nextLine = activeLineIndex >= 0 ? timeline.lines[activeLineIndex + 1] ?? null : null;
@@ -1079,6 +1105,101 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     flushAutosaveRef.current = flushAutosave;
   }, [flushAutosave]);
 
+  const alignInstrumentalToVideo = useCallback((force = false) => {
+    const video = videoRef.current;
+    const audio = instrumentalAudioRef.current;
+    if (!video || !audio) return;
+    audio.playbackRate = video.playbackRate;
+    if (force || previewAudioNeedsSync(video.currentTime, audio.currentTime)) {
+      try {
+        audio.currentTime = video.currentTime;
+      } catch {
+        // Metadata may still be loading; onLoadedMetadata aligns it again.
+      }
+    }
+  }, []);
+
+  const pauseViewer = useCallback(() => {
+    videoRef.current?.pause();
+    instrumentalAudioRef.current?.pause();
+  }, []);
+
+  const playViewer = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    document.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
+      if (usingInstrumentalPreview && audio === instrumentalAudioRef.current) return;
+      audio.pause();
+    });
+    video.volume = viewerVolume;
+    if (!usingInstrumentalPreview) {
+      instrumentalAudioRef.current?.pause();
+      video.muted = false;
+      void video.play().catch(() => undefined);
+      return;
+    }
+    const audio = instrumentalAudioRef.current;
+    if (!audio) return;
+    video.muted = true;
+    audio.volume = viewerVolume;
+    alignInstrumentalToVideo(true);
+    const audioPlayback = audio.play();
+    const videoPlayback = video.play();
+    void Promise.all([audioPlayback, videoPlayback]).catch(() => {
+      audio.pause();
+      video.pause();
+    });
+  }, [alignInstrumentalToVideo, usingInstrumentalPreview, viewerVolume]);
+
+  const choosePreviewAudioMode = (mode: PreviewAudioMode) => {
+    if (mode === 'instrumental' && !instrumentalUrl) return;
+    setPreviewAudioMode(mode);
+    const video = videoRef.current;
+    const audio = instrumentalAudioRef.current;
+    if (!video) return;
+    if (mode === 'original') {
+      audio?.pause();
+      video.muted = false;
+      video.volume = viewerVolume;
+      return;
+    }
+    video.muted = true;
+    if (!audio) return;
+    audio.volume = viewerVolume;
+    alignInstrumentalToVideo(true);
+    if (!video.paused) {
+      void audio.play().catch(() => video.pause());
+    }
+  };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const audio = instrumentalAudioRef.current;
+    if (!video) return;
+    video.volume = viewerVolume;
+    if (audio) audio.volume = viewerVolume;
+    video.muted = usingInstrumentalPreview;
+    if (!usingInstrumentalPreview) {
+      audio?.pause();
+      return;
+    }
+    alignInstrumentalToVideo(true);
+    if (!video.paused && audio) {
+      void audio.play().catch(() => video.pause());
+    }
+  }, [alignInstrumentalToVideo, instrumentalUrl, usingInstrumentalPreview, viewerVolume]);
+
+  useEffect(() => {
+    if (!usingInstrumentalPreview || !isPlaying) return;
+    let frameId = 0;
+    const keepAudioLocked = () => {
+      alignInstrumentalToVideo();
+      frameId = window.requestAnimationFrame(keepAudioLocked);
+    };
+    frameId = window.requestAnimationFrame(keepAudioLocked);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [alignInstrumentalToVideo, isPlaying, usingInstrumentalPreview]);
+
   useEffect(() => () => {
     mountedRef.current = false;
     if (autosaveTimerRef.current !== null) {
@@ -1097,11 +1218,8 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
 
   const startAudition = (range: ManualLoopRange) => {
     updateLoopRange(range);
-    setCurrentTimeUs(range.startUs);
-    if (videoRef.current) {
-      videoRef.current.currentTime = range.startUs / 1_000_000;
-      void videoRef.current.play().catch(() => undefined);
-    }
+    seek(range.startUs);
+    playViewer();
   };
 
   const silenceManualDrag = () => {
@@ -1164,18 +1282,25 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const seek = (us: number) => {
     setCurrentTimeUs(us);
     if (videoRef.current) videoRef.current.currentTime = us / 1_000_000;
+    if (usingInstrumentalPreview && instrumentalAudioRef.current) {
+      try {
+        instrumentalAudioRef.current.currentTime = us / 1_000_000;
+      } catch {
+        // Metadata may still be loading; video seek events align it again.
+      }
+    }
   };
 
   const togglePlayback = () => {
     const player = videoRef.current;
     if (!player) return;
-    if (player.paused) void player.play().catch(() => undefined);
-    else player.pause();
+    if (player.paused) playViewer();
+    else pauseViewer();
   };
 
   const stepViewerFrame = (direction: -1 | 1) => {
     updateLoopRange(null);
-    videoRef.current?.pause();
+    pauseViewer();
     seek(Math.min(
       timeline.duration_us,
       stepPreviewFrameTimeUs(currentTimeUs, direction),
@@ -1186,6 +1311,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     const next = Math.max(0, Math.min(1, value));
     setViewerVolume(next);
     if (videoRef.current) videoRef.current.volume = next;
+    if (instrumentalAudioRef.current) instrumentalAudioRef.current.volume = next;
   };
 
   const selectToken = (tokenId: string, lineId = activeLine?.id) => {
@@ -1228,7 +1354,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     const player = videoRef.current;
     if (!player) return;
     setCurrentTimeUs(Math.round(player.currentTime * 1_000_000));
-    void player.play().catch(() => undefined);
+    playViewer();
   };
 
   const refreshTransitionLoop = (next: Timeline) => {
@@ -1300,6 +1426,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
           preset,
           countdown: true,
           expected_timeline_revision: expectedTimelineRevision,
+          expected_instrumental_id: mode === 'final' ? data.project.selected_instrumental : null,
         }),
       });
       watchJob(response.job);
@@ -1432,7 +1559,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     <section className="fcp-editor-workspace">
         <section className="monitor-panel">
           <div className="panel-toolbar">
-            <div><span className="viewer-title">VIEWER</span><strong className="preview-quality-badge" aria-label="Preview mặc định 1920 nhân 1080, 120 fps">◆ 1080P · 120 FPS</strong><strong className="mix-audio-badge">● ORIGINAL MIX</strong>{data.backgroundPlan && <strong className="auto-scene-badge">✦ AUTO SCENE · {data.backgroundPlan.assets.length}</strong>}</div>
+            <div><span className="viewer-title">VIEWER</span><strong className="preview-quality-badge" aria-label="Preview mặc định 1920 nhân 1080, 120 fps">◆ 1080P · 120 FPS</strong><strong className={`mix-audio-badge ${usingInstrumentalPreview ? 'is-instrumental' : 'is-original'}`} aria-label={usingInstrumentalPreview ? `Karaoke ${data.project.instrumental_confirmed ? 'đã xác nhận' : 'chưa xác nhận'}` : 'Original Mix'} title={usingInstrumentalPreview ? `Đúng stem sẽ dùng khi xuất Karaoke: ${selectedInstrumentalName} · ${data.project.instrumental_confirmed ? 'đã xác nhận' : 'chưa xác nhận'}` : 'Âm thanh có ca sĩ từ video gốc'}>● {usingInstrumentalPreview ? `KARAOKE${data.project.instrumental_confirmed ? ' ✓' : ''}` : 'ORIGINAL MIX'}</strong>{data.backgroundPlan && <strong className="auto-scene-badge">✦ AUTO SCENE · {data.backgroundPlan.assets.length}</strong>}</div>
             <span className="viewer-timecode">{formatFrameTime(currentTimeUs, timeline, KARAOKE_PREVIEW_FPS, 1)} <i>/</i> {formatFrameTime(timeline.duration_us, timeline, KARAOKE_PREVIEW_FPS, 1)}</span>
             <div className="viewer-tools" aria-hidden="true"><span>⌗</span><span>▣</span><span>100%</span></div>
           </div>
@@ -1460,35 +1587,67 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 mediaRef={videoRef}
               />
             )}
-            <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" onPlay={(event) => {
+            <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" muted={usingInstrumentalPreview} onPlay={(event) => {
               setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
               setIsPlaying(true);
+              if (usingInstrumentalPreview) {
+                alignInstrumentalToVideo(true);
+                const audio = instrumentalAudioRef.current;
+                if (audio) void audio.play().catch(() => event.currentTarget.pause());
+              }
             }} onPause={(event) => {
+              instrumentalAudioRef.current?.pause();
               setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
               setIsPlaying(false);
             }} onEnded={(event) => {
+              instrumentalAudioRef.current?.pause();
               setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
               setIsPlaying(false);
             }} onSeeked={(event) => {
+              if (usingInstrumentalPreview) alignInstrumentalToVideo(true);
               setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
             }} onTimeUpdate={(event) => {
               const nowUs = Math.round(event.currentTarget.currentTime * 1_000_000);
+              if (usingInstrumentalPreview) alignInstrumentalToVideo();
               const audition = loopRangeRef.current;
               if (audition && nowUs >= audition.endUs) {
                 if (!audition.repeat) {
                   updateLoopRange(null);
-                  event.currentTarget.pause();
+                  pauseViewer();
                   event.currentTarget.currentTime = audition.endUs / 1_000_000;
+                  alignInstrumentalToVideo(true);
                   setCurrentTimeUs(audition.endUs);
                   return;
                 }
                 event.currentTarget.currentTime = audition.startUs / 1_000_000;
+                alignInstrumentalToVideo(true);
                 setCurrentTimeUs(audition.startUs);
-                if (!event.currentTarget.paused) void event.currentTarget.play();
+                if (!event.currentTarget.paused) playViewer();
                 return;
               }
               setCurrentTimeUs(nowUs);
             }} />
+            {instrumentalUrl && (
+              <audio
+                className="viewer-instrumental-audio"
+                key={instrumentalUrl}
+                ref={instrumentalAudioRef}
+                src={instrumentalUrl}
+                preload="metadata"
+                onLoadedMetadata={(event) => {
+                  event.currentTarget.volume = viewerVolume;
+                  if (!usingInstrumentalPreview) return;
+                  alignInstrumentalToVideo(true);
+                  if (videoRef.current && !videoRef.current.paused) {
+                    void event.currentTarget.play().catch(() => videoRef.current?.pause());
+                  }
+                }}
+                onError={() => {
+                  setPreviewAudioMode('original');
+                  onError('Không phát được instrumental đã chọn; Viewer đã trở về bản gốc.');
+                }}
+              />
+            )}
             <SongCreditOverlay
               title={data.project.title}
               artist={data.project.artist}
@@ -1503,7 +1662,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
               playing={isPlaying}
             />
           </div>
-          <Waveform data={data.waveform?.mix ?? []} nowUs={currentTimeUs} durationUs={timeline.duration_us} onSeek={seek} />
+          <Waveform data={previewWaveform} nowUs={currentTimeUs} durationUs={timeline.duration_us} onSeek={seek} />
           <div className="viewer-transport-bar">
             <span>{loopRange ? `${loopRange.kind === 'transition' ? 'CHUYỂN CÂU' : loopRange.kind === 'line' ? 'NGUYÊN CÂU' : 'LOOP TỪ'} · ${activeLine?.tokens.find((token) => token.id === loopRange.tokenId)?.text ?? 'TIMING'}` : 'PREVIEW · 1920×1080 · 120 FPS'}</span>
             <div className="viewer-transport">
@@ -1514,6 +1673,10 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
               <button title="Nghe lại nguyên câu" type="button" onClick={replayActiveLine}>↻</button>
             </div>
             <div className="viewer-audio-controls">
+              <div className="preview-audio-switch" role="group" aria-label="Nguồn âm thanh Viewer">
+                <button className={usingInstrumentalPreview ? 'active' : ''} disabled={!instrumentalUrl} aria-pressed={usingInstrumentalPreview} title={instrumentalUrl ? `Nghe đúng stem Karaoke: ${selectedInstrumentalName}` : 'Chưa có instrumental'} type="button" onClick={() => choosePreviewAudioMode('instrumental')}>KARAOKE</button>
+                <button className={!usingInstrumentalPreview ? 'active' : ''} aria-pressed={!usingInstrumentalPreview} title="Nghe lại âm thanh có ca sĩ từ video gốc" type="button" onClick={() => choosePreviewAudioMode('original')}>GỐC</button>
+              </div>
               <span>VOL</span>
               <input aria-label="Âm lượng Viewer" type="range" min="0" max="1" step="0.05" value={viewerVolume} onChange={(event) => setVolume(Number(event.target.value))} />
               <button title="Toàn màn hình" type="button" onClick={() => void videoRef.current?.parentElement?.requestFullscreen()}>⛶</button>
@@ -1558,7 +1721,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 </div>
               </section>
             )}
-            {inspectorTab === 'audio' && <CandidateReview project={data.project} waveform={data.waveform} artifacts={data.artifacts} onReload={onReload} onError={onError} />}
+            {inspectorTab === 'audio' && <CandidateReview project={data.project} waveform={data.waveform} artifacts={data.artifacts} onReload={onReload} onError={onError} onSelected={() => setPreviewAudioMode('instrumental')} />}
             {inspectorTab === 'text' && (
               <section className="text-inspector">
                 <div><span className="section-kicker">TEXT INSPECTOR</span><h2>Hai dòng Karaoke cố định</h2><p>Font được áp dụng đồng nhất cho Preview và video xuất. Mọi thay đổi đều tự lưu vào TimelineV1.</p></div>
@@ -1575,11 +1738,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
             )}
             {inspectorTab === 'export' && (
               <section className="export-panel">
-                <div><span className="section-kicker">SHARE / XUẤT VIDEO</span><h2>Xuất video bất cứ lúc nào</h2><p>Điểm cần duyệt chỉ là cảnh báo, không khóa xuất. QA vẫn ghi rõ trạng thái kiểm chứng trong báo cáo.</p></div>
+                <div><span className="section-kicker">SHARE / XUẤT VIDEO</span><h2>Xuất đúng âm thanh đã nghe</h2><p>Điểm timing chỉ là cảnh báo. Draft mix gốc luôn khả dụng; Final loại giọng cần xác nhận đúng instrumental để không xuất nhầm.</p></div>
                 <label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as ExportPreset)}>{EXPORT_PRESET_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
                 {preset === '1080p120' && <p className="export-preset-warning">120fps CFR thật · phát 1× trong QuickTime · clock từng frame rõ ràng. Thiết bị vẫn cần hỗ trợ giải mã H.264 1080p120.</p>}
-                <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ</button><button className="final-button" title={data.project.selected_instrumental ? 'QA không khóa thao tác xuất' : 'Chưa có instrumental để loại giọng'} disabled={!data.project.selected_instrumental || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Final đã loại giọng' : 'Xuất Karaoke loại giọng'}</button></div>
-                <button className="verification-gate" disabled={dirty || saving || data.project.state === 'VERIFIED' || data.project.state === 'RENDERED'} type="button" onClick={markVerified}><span>{data.project.instrumental_confirmed ? '✓' : '○'} Instrumental</span><span>{lowConfidence === 0 ? '✓' : '○'} {lowConfidence ? `${lowConfidence} điểm nên kiểm tra` : 'Timing AI đã đạt'}</span><strong>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'ĐÃ VERIFIED' : 'VERIFIED là tùy chọn · không khóa xuất'}</strong></button>
+                <div className={`export-audio-summary ${data.project.instrumental_confirmed ? 'confirmed' : 'needs-confirmation'}`}><span>Âm thanh Karaoke</span><strong>{selectedInstrumentalName}</strong><small>{data.project.instrumental_confirmed ? '✓ Đã nghe và xác nhận · Final dùng đúng stem này' : 'Cần nghe và xác nhận trước khi xuất Final'}</small>{!data.project.instrumental_confirmed && <button type="button" onClick={() => setInspectorTab('audio')}>Mở Audio để xác nhận</button>}</div>
+                <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ · mix gốc</button><button className="final-button" title={!data.project.selected_instrumental ? 'Chưa có instrumental để loại giọng' : !data.project.instrumental_confirmed ? 'Hãy nghe và xác nhận instrumental trong tab Audio' : `Final sẽ dùng ${selectedInstrumentalName}`} disabled={!data.project.selected_instrumental || !data.project.instrumental_confirmed || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Final đã loại giọng' : 'Xuất Karaoke loại giọng'}</button></div>
+                <button className="verification-gate" disabled={dirty || saving || data.project.state === 'VERIFIED' || data.project.state === 'RENDERED'} type="button" onClick={markVerified}><span>{data.project.instrumental_confirmed ? '✓' : '○'} Instrumental</span><span>{lowConfidence === 0 ? '✓' : '○'} {lowConfidence ? `${lowConfidence} điểm nên kiểm tra` : 'Timing AI đã đạt'}</span><strong>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'ĐÃ VERIFIED' : 'Timeline Verified là tùy chọn · Final chỉ khóa khi stem chưa xác nhận'}</strong></button>
                 <ExportList
                   projectId={data.project.id}
                   artifacts={data.artifacts}
@@ -1599,11 +1763,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   );
 }
 
-function CandidateReview({ project, waveform, artifacts, onReload, onError }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; onReload: () => Promise<void>; onError: (message: string | null) => void }) {
+function CandidateReview({ project, waveform, artifacts, onReload, onError, onSelected }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; onReload: () => Promise<void>; onError: (message: string | null) => void; onSelected: (candidateId: string) => void }) {
   const select = async (candidateId: string) => {
     try {
       await api<Project>(`/api/projects/${project.id}/instrumental`, { method: 'POST', body: JSON.stringify({ candidate_id: candidateId, confirmed: true }) });
       await onReload();
+      onSelected(candidateId);
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Không xác nhận được instrumental.');
     }
@@ -1611,17 +1776,21 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError }: { 
 
   return (
     <section className="candidate-panel">
-      <div><span className="section-kicker">A/B INSTRUMENTAL</span><h2>Nghe trước khi xác nhận</h2><p>Không có thước đo tự động nào bảo đảm sạch vocal cho mọi bài. Tai người là cổng chất lượng cuối.</p></div>
+      <div><span className="section-kicker">AUDIO A/B</span><h2>Chọn âm thanh Final</h2><p>Viewer mặc định nghe đúng candidate đang chọn. Hãy nghe cùng lời chạy rồi xác nhận; bạn vẫn có thể chuyển sang GỐC để đối chiếu.</p></div>
       <div className="candidate-list">
         {Object.entries(waveform?.candidates ?? {}).map(([candidateId, candidate]) => {
-          const artifact = artifacts.find((item) => item.id.endsWith(`/stems/${candidateId}/instrumental.wav`) || item.id.endsWith(`stems/${candidateId}/instrumental.wav`));
+          const artifact = selectedInstrumentalArtifact(candidateId, artifacts);
           const selected = project.selected_instrumental === candidateId;
           return (
             <article className={`candidate-card ${selected ? 'selected' : ''}`} key={candidateId}>
               <div><span>{candidate.production_grade ? 'AI' : 'FB'}</span><strong>{candidate.label}</strong><small>{candidate.production_grade ? 'Production candidate' : 'Fallback cần kiểm tra kỹ'}</small></div>
-              {artifact && <audio controls preload="none" src={assetUrl(artifact.url)} />}
+              {artifact && <audio controls preload="none" src={assetUrl(artifact.url)} onPlay={(event) => {
+                document.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
+                  if (media !== event.currentTarget) media.pause();
+                });
+              }} />}
               {candidate.warning && <p>{candidate.warning}</p>}
-              <button type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Đã xác nhận ✓' : 'Chọn và xác nhận'}</button>
+              <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Đã xác nhận ✓' : selected ? 'Xác nhận dùng bản này' : 'Chọn và xác nhận'}</button>
             </article>
           );
         })}

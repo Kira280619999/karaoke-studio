@@ -455,8 +455,26 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             )
         if request.mode == "final" and not project.selected_instrumental:
             raise HTTPException(409, "Chưa có instrumental để xuất bản loại giọng.")
+        if request.mode == "final" and not project.instrumental_confirmed:
+            raise HTTPException(
+                409,
+                "Hãy nghe và xác nhận instrumental trong tab Audio trước khi xuất Final.",
+            )
+        render_options = request.model_dump()
+        if request.mode == "final":
+            if (
+                request.expected_instrumental_id is not None
+                and request.expected_instrumental_id != project.selected_instrumental
+            ):
+                raise HTTPException(
+                    409,
+                    "Instrumental đã đổi sau khi Viewer tải dữ liệu. Hãy nghe lại rồi xuất Final.",
+                )
+            # Bind the worker to the exact confirmed stem that exists at queue time.
+            # Older clients may omit the field, so the server remains authoritative.
+            render_options["expected_instrumental_id"] = project.selected_instrumental
         try:
-            job = jobs.start(project_id, "render", request.model_dump())
+            job = jobs.start(project_id, "render", render_options)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"job": job}

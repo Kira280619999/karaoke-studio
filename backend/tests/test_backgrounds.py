@@ -167,7 +167,8 @@ def test_custom_background_filter_graph_decodes_crossfade(
 
     assert count == 2
     assert "xfade=transition=fadeslow" in graph
-    assert graph.count("zoompan=") == 2
+    assert graph.count("perspective=") == 2
+    assert graph.count("eval=frame:interpolation=cubic") == 2
     assert "force_original_aspect_ratio=increase" in graph
     subprocess.run(
         [
@@ -191,16 +192,69 @@ def test_custom_background_filter_graph_decodes_crossfade(
     )
 
 
-def test_ken_burns_motion_alternates_direction_and_stays_subtle() -> None:
+def test_ken_burns_motion_matches_preview_curves_at_frame_time() -> None:
     preset = RenderPreset(1920, 1080, 60, 1)
 
     first = _background_motion_filter(0, preset, 10_000_000)
     second = _background_motion_filter(1, preset, 10_000_000)
 
-    assert "1.035000+(0.050000)*on/599" in first
-    assert "-0.200000+(0.400000)*on/599" in first
-    assert "1.085000+(-0.040000)*on/599" in second
-    assert "0.550000+(-1.100000)*on/599" in second
+    assert "1.035000+(0.050000)*in*1000000/600000000" in first
+    assert "0.300000+(-0.600000)*in*1000000/600000000" in first
+    assert "-0.150000+(0.300000)*in*1000000/600000000" in first
+    assert "1.085000+(-0.040000)*in*1000000/600000000" in second
+    assert "-0.800000+(1.600000)*in*1000000/600000000" in second
+    assert "0.200000+(-0.400000)*in*1000000/600000000" in second
+    assert "sense=source:eval=frame:interpolation=cubic" in first
+
+
+def test_120fps_still_background_motion_changes_every_frame(
+    test_settings, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "smooth-motion-project"
+    source_dir = project_dir / "source"
+    source_dir.mkdir(parents=True)
+    background = source_dir / "detail.png"
+    Image.effect_noise((640, 360), 96).convert("RGB").save(background)
+    timeline = parse_lrc("[00:00.00]Chuyển động mượt", duration_us=2_000_000)
+    plan = build_background_plan([background], timeline, test_settings)
+
+    input_args, graph, _count = _custom_background_pipeline(
+        plan,
+        project_dir,
+        RenderPreset(320, 180, 120, 1),
+    )
+    result = subprocess.run(
+        [
+            test_settings.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            *input_args,
+            "-filter_complex",
+            graph,
+            "-map",
+            "[bg]",
+            "-frames:v",
+            "240",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "framemd5",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    hashes = [
+        row.rsplit(", ", 1)[-1]
+        for row in result.stdout.splitlines()
+        if row and not row.startswith("#")
+    ]
+
+    assert len(hashes) == 240
+    assert all(left != right for left, right in zip(hashes, hashes[1:], strict=False))
 
 
 def test_full_draft_render_uses_multi_scene_background(

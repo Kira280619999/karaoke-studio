@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
 from fastapi.testclient import TestClient
 
 from karaoke_studio.api import create_app
@@ -308,12 +309,65 @@ def test_synthetic_process_render_and_qa(
             options=options,
         ),
     )
-    early_api_render = client.post(
+    unconfirmed_api_render = client.post(
         f"/api/projects/{project_id}/renders",
         json={"mode": "final", "preset": "source", "countdown": True},
     )
+    assert unconfirmed_api_render.status_code == 409
+    assert "xác nhận instrumental" in unconfirmed_api_render.text
+
+    unconfirmed_render_job = JobRecord(
+        id="job_unconfirmed_render_test",
+        project_id=project_id,
+        kind="render",
+        state=JobState.RUNNING,
+        progress=0,
+        message="test",
+        created_at=now_iso(),
+        updated_at=now_iso(),
+        options={"mode": "final", "preset": "source", "countdown": True},
+    )
+    store.add_job(unconfirmed_render_job)
+    with pytest.raises(RuntimeError, match="chưa được nghe và xác nhận"):
+        render_project(
+            unconfirmed_render_job.id,
+            project_id,
+            unconfirmed_render_job.options,
+            test_settings,
+        )
+
+    confirmed_instrumental = client.post(
+        f"/api/projects/{project_id}/instrumental",
+        json={"candidate_id": "center_cancel", "confirmed": True},
+    )
+    assert confirmed_instrumental.status_code == 200
+    assert confirmed_instrumental.json()["instrumental_confirmed"] is True
+
+    early_api_render = client.post(
+        f"/api/projects/{project_id}/renders",
+        json={
+            "mode": "final",
+            "preset": "source",
+            "countdown": True,
+            "expected_instrumental_id": "center_cancel",
+        },
+    )
     assert early_api_render.status_code == 200, early_api_render.text
     assert early_api_render.json()["job"]["options"]["mode"] == "final"
+    assert (
+        early_api_render.json()["job"]["options"]["expected_instrumental_id"]
+        == "center_cancel"
+    )
+    stale_instrumental_render = client.post(
+        f"/api/projects/{project_id}/renders",
+        json={
+            "mode": "final",
+            "preset": "source",
+            "expected_instrumental_id": "candidate_from_stale_viewer",
+        },
+    )
+    assert stale_instrumental_render.status_code == 409
+    assert "Instrumental đã đổi" in stale_instrumental_render.text
 
     current_revision = store.load_timeline(project_id).revision
     stale_api_render = client.post(
@@ -363,9 +417,31 @@ def test_synthetic_process_render_and_qa(
         message="test",
         created_at=now_iso(),
         updated_at=now_iso(),
-        options={"mode": "final", "preset": "source", "countdown": True},
+        options={
+            "mode": "final",
+            "preset": "source",
+            "countdown": True,
+            "expected_instrumental_id": "center_cancel",
+        },
     )
     store.add_job(early_render_job)
+    store.update_project(
+        project_id,
+        selected_instrumental="candidate_changed_after_queue",
+        instrumental_confirmed=True,
+    )
+    with pytest.raises(RuntimeError, match="đã đổi sau khi xếp hàng render"):
+        render_project(
+            early_render_job.id,
+            project_id,
+            early_render_job.options,
+            test_settings,
+        )
+    store.update_project(
+        project_id,
+        selected_instrumental="center_cancel",
+        instrumental_confirmed=True,
+    )
     render_project(
         early_render_job.id,
         project_id,
@@ -383,6 +459,7 @@ def test_synthetic_process_render_and_qa(
     early_report = json.loads(early_report_path.read_text(encoding="utf-8"))
     assert early_report["status"] == "PASS_WITH_WARNINGS"
     assert early_report["timing_verified_at_render"] is False
+    assert early_report["render_bound_instrumental_candidate"] == "center_cancel"
     assert "TIMING_NOT_VERIFIED" in early_report["advisory_reasons"]
 
     timeline = store.load_timeline(project_id)

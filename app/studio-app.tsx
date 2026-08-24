@@ -71,6 +71,7 @@ import {
   moveTokenBy,
   nearestMarkerWithin,
   lyricFitScale,
+  pasteTimelineLineAt,
   previewFrameTimeUs,
   setPreviousLineEnd,
   trimTokenEdge,
@@ -2235,6 +2236,7 @@ function SongTimelineRoll({
   const [markers, setMarkers] = useState<number[]>([]);
   const [lyricDraft, setLyricDraft] = useState('');
   const [lyricNotice, setLyricNotice] = useState('Bấm một từ trên timeline để bắt đầu chỉnh lời.');
+  const [copiedLine, setCopiedLine] = useState<LineTiming | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
@@ -2613,6 +2615,36 @@ function SongTimelineRoll({
     onSelectToken(lineId, tokenId);
   };
 
+  const copySelectedLine = () => {
+    if (!structureLine) {
+      setLyricNotice('Hãy chọn một câu trước khi sao chép.');
+      return;
+    }
+    setCopiedLine(structuredClone(structureLine));
+    setLyricNotice(`Đã copy nguyên câu “${structureLine.text}” cùng nhịp từng từ.`);
+  };
+
+  const pasteCopiedLine = () => {
+    onSilence();
+    if (!copiedLine) {
+      setLyricNotice('Hãy copy một câu trước.');
+      return;
+    }
+    const existingIds = new Set(timeline.lines.map((line) => line.id));
+    const next = pasteTimelineLineAt(timeline, copiedLine, nowUs);
+    const pastedLine = next.lines.find((line) => !existingIds.has(line.id));
+    const pastedToken = pastedLine?.tokens[0];
+    if (next === timeline || !pastedLine || !pastedToken) {
+      setLyricNotice('Không còn đủ thời gian trong video để dán trọn câu đã copy.');
+      return;
+    }
+    onStructureChange(next, pastedLine.id, pastedToken.id);
+    setLyricDraft(pastedToken.text);
+    setLyricNotice(
+      `Đã dán “${pastedLine.text}” tại ${formatFrameTime(pastedLine.start_us, timeline)} · mọi nhịp và frame từng từ được giữ nguyên.`,
+    );
+  };
+
   const applyStructureAction = (
     action: 'rename' | 'insert-before' | 'insert-after' | 'delete-token' | 'insert-line' | 'delete-line',
   ) => {
@@ -2729,6 +2761,29 @@ function SongTimelineRoll({
             <button disabled={!canRedo} type="button" onClick={onRedo}>↷ Redo</button>
             <button className={lineLocked ? 'active' : ''} type="button" onClick={onToggleLock}>{lineLocked ? 'Mở khóa câu' : 'Khóa câu'}</button>
             <button className={`approve ${lineVerified ? 'active' : ''}`} type="button" onClick={onVerifyLine}>{lineVerified ? 'Đã duyệt ✓' : 'Duyệt câu'}</button>
+          </div>
+          <div className="song-roll-copy-actions" role="group" aria-label="Sao chép, dán và xoá nguyên câu cùng nhịp">
+            <button
+              className={copiedLine?.id === structureLine?.id ? 'active' : ''}
+              disabled={!structureLine}
+              type="button"
+              title="Copy nguyên lời, độ dài từng từ và đường quét"
+              onClick={copySelectedLine}
+            >{copiedLine?.id === structureLine?.id ? '✓ Đã copy câu + nhịp' : '⧉ Copy câu + nhịp'}</button>
+            <button
+              className="paste"
+              disabled={!copiedLine}
+              type="button"
+              title={copiedLine ? `Dán “${copiedLine.text}” bắt đầu đúng tại frame đầu phát` : 'Hãy copy một câu trước'}
+              onClick={pasteCopiedLine}
+            >＋ Dán tại đầu phát</button>
+            <button
+              className="danger"
+              disabled={!structureLine || structureLocked || timeline.lines.length === 1}
+              type="button"
+              title="Xoá câu đang chọn; có thể Undo"
+              onClick={() => applyStructureAction('delete-line')}
+            >Xoá câu ↶</button>
           </div>
           <button
             className="song-roll-expand"

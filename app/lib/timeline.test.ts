@@ -26,6 +26,7 @@ import {
   moveLineBy,
   moveTokenBy,
   nearestMarkerWithin,
+  pasteTimelineLineAt,
   rescaleSweep,
   previewFrameTimeUs,
   setBoundary,
@@ -399,6 +400,82 @@ test('manual lyric editor deletes a line but never leaves an empty song', () => 
   assert.equal(removed.lines.length, 1);
   assert.equal(removed.lines[0].text, 'Câu mới');
   assert.equal(deleteTimelineLine(timeline, 'line-1'), timeline);
+});
+
+test('copy and paste keeps every word and sweep offset on the exact same rhythm', () => {
+  const source = structuredClone(line);
+  source.tokens[0].sweep = {
+    schema_version: '1.0',
+    source: 'ensemble_ctc',
+    confidence: 0.96,
+    verified: true,
+    points: [
+      { time_us: 1_000_000, line_progress_ppm: 0 },
+      { time_us: 1_350_000, line_progress_ppm: 220_000 },
+      { time_us: 1_800_000, line_progress_ppm: 400_000 },
+    ],
+  };
+  source.tokens[1].sweep = {
+    schema_version: '1.0',
+    source: 'ensemble_ctc',
+    confidence: 0.94,
+    verified: true,
+    points: [
+      { time_us: 1_800_000, line_progress_ppm: 400_000 },
+      { time_us: 2_250_000, line_progress_ppm: 710_000 },
+      { time_us: 3_000_000, line_progress_ppm: 1_000_000 },
+    ],
+  };
+  const extended: Timeline = {
+    ...structuredClone(timeline),
+    duration_us: 10_000_000,
+    lines: [source],
+  };
+
+  const changed = pasteTimelineLineAt(extended, source, 6_012_000);
+  const pasted = changed.lines.find((candidate) => candidate.id !== source.id)!;
+  const deltaUs = pasted.start_us - source.start_us;
+  const frameUs = Math.round(1_000_000 / extended.fps_numerator);
+
+  assert.equal(pasted.start_us % frameUs, 0);
+  assert.equal(pasted.text, source.text);
+  assert.equal(pasted.end_us - pasted.start_us, source.end_us - source.start_us);
+  assert.deepEqual(
+    pasted.tokens.map((token) => [
+      token.text,
+      token.start_us - pasted.start_us,
+      token.end_us - pasted.start_us,
+    ]),
+    source.tokens.map((token) => [
+      token.text,
+      token.start_us - source.start_us,
+      token.end_us - source.start_us,
+    ]),
+  );
+  assert.deepEqual(
+    pasted.tokens.map((token) => token.sweep?.points.map((point) => [
+      point.time_us - pasted.start_us,
+      point.line_progress_ppm,
+    ])),
+    source.tokens.map((token) => token.sweep?.points.map((point) => [
+      point.time_us - source.start_us,
+      point.line_progress_ppm,
+    ])),
+  );
+  assert.ok(pasted.tokens.every((token) => token.source === 'manual' && !token.verified));
+  assert.ok(pasted.tokens.every((token, index) => token.id !== source.tokens[index].id));
+  assert.equal(pasted.tokens[0].start_us, source.tokens[0].start_us + deltaUs);
+  assert.equal(source.tokens[0].sweep?.source, 'ensemble_ctc');
+});
+
+test('a pasted rhythm can be deleted without changing the original line', () => {
+  const extended = { ...structuredClone(timeline), duration_us: 8_000_000 };
+  const pastedTimeline = pasteTimelineLineAt(extended, extended.lines[0], 5_000_000);
+  const pasted = pastedTimeline.lines.find((candidate) => candidate.id !== line.id)!;
+  const removed = deleteTimelineLine(pastedTimeline, pasted.id);
+
+  assert.equal(pastedTimeline.lines.length, 2);
+  assert.deepEqual(removed.lines, extended.lines);
 });
 
 test('highlight moves monotonically across token text including its leading space', () => {

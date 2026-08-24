@@ -393,6 +393,63 @@ export function insertTimelineLine(
   return copy;
 }
 
+/**
+ * Paste a copied lyric line at a new frame without rescaling its rhythm.
+ * Every token duration, gap, and sweep control-point offset stays identical;
+ * only the absolute timestamps and ids change.
+ */
+export function pasteTimelineLineAt(
+  timeline: Timeline,
+  copiedLine: LineTiming,
+  preferredStartUs: number,
+): Timeline {
+  const durationUs = copiedLine.end_us - copiedLine.start_us;
+  if (
+    durationUs <= 0
+    || durationUs > timeline.duration_us
+    || copiedLine.tokens.length === 0
+  ) return timeline;
+
+  const frameUs = Math.max(
+    1,
+    Math.round(1_000_000 * timeline.fps_denominator / timeline.fps_numerator),
+  );
+  const requestedStartUs = Number.isFinite(preferredStartUs)
+    ? Math.max(0, preferredStartUs)
+    : copiedLine.start_us;
+  const snappedStartUs = Math.round(requestedStartUs / frameUs) * frameUs;
+  const startUs = Math.min(timeline.duration_us - durationUs, snappedStartUs);
+  const deltaUs = startUs - copiedLine.start_us;
+  const pastedLine = structuredClone(copiedLine);
+  pastedLine.id = nextManualId('line');
+  pastedLine.start_us += deltaUs;
+  pastedLine.end_us += deltaUs;
+  pastedLine.source = 'manual';
+  pastedLine.confidence = Math.min(0.77, pastedLine.confidence);
+  pastedLine.verified = false;
+  pastedLine.locked = false;
+  pastedLine.tokens.forEach((token) => {
+    token.id = nextManualId('token');
+    token.start_us += deltaUs;
+    token.end_us += deltaUs;
+    token.source = 'manual';
+    token.confidence = Math.min(0.77, token.confidence);
+    token.verified = false;
+    token.locked = false;
+    if (token.sweep) {
+      token.sweep.source = 'manual_rescaled';
+      token.sweep.confidence = Math.min(0.77, token.sweep.confidence);
+      token.sweep.verified = false;
+      token.sweep.points.forEach((point) => { point.time_us += deltaUs; });
+    }
+  });
+
+  const copy = structuredClone(timeline);
+  const insertIndex = copy.lines.findIndex((line) => line.start_us > pastedLine.start_us);
+  copy.lines.splice(insertIndex < 0 ? copy.lines.length : insertIndex, 0, pastedLine);
+  return copy;
+}
+
 export function deleteTimelineLine(timeline: Timeline, lineId: string): Timeline {
   const lineIndex = timeline.lines.findIndex((line) => line.id === lineId);
   const line = timeline.lines[lineIndex];

@@ -21,6 +21,20 @@ WHITE = (248, 247, 241, 255)
 PREVIEW = (215, 222, 231, 235)
 INK = (0, 0, 0, 225)
 KARAOKE_SHADOW = (5, 16, 59, 245)
+KARAOKE_COUNTDOWN_US = 3_000_000
+
+
+def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int) -> int | None:
+    gap_us = next_start_us - gap_start_us
+    until_us = next_start_us - now_us
+    if (
+        gap_us < KARAOKE_COUNTDOWN_US
+        or now_us < gap_start_us
+        or until_us <= 0
+        or until_us > KARAOKE_COUNTDOWN_US
+    ):
+        return None
+    return max(1, min(3, math.ceil(until_us / 1_000_000)))
 
 
 @dataclass(frozen=True)
@@ -151,12 +165,12 @@ class KaraokeRenderer:
         self.font_id = timeline.metadata.get("karaoke_font", "noto_sans")
         self.font_path = resolve_font(settings, self.font_id)
         self.highlight_color = karaoke_color_rgba(timeline.metadata.get("karaoke_color"))
-        self.font = load_font(self.font_path, round(self.preset.height * 0.072))
+        self.font = load_font(self.font_path, round(self.preset.height * 0.084))
         self.line_fonts: dict[str, ImageFont.FreeTypeFont] = {}
         self.line_scales: dict[str, float] = {}
         self.assets: dict[tuple[int, bool], LineAsset] = {}
-        upper = round(self.overlay_height * 0.30)
-        lower = round(self.overlay_height * 0.70)
+        upper = round(self.overlay_height * 0.34)
+        lower = round(self.overlay_height * 0.66)
         self.lane_y = (upper, lower)
         for index, line in enumerate(timeline.lines):
             y = self.lane_y[index % 2]
@@ -208,15 +222,15 @@ class KaraokeRenderer:
                 if previous_ended or first_lead:
                     rows.append((upcoming, False))
                     gap_start = 0 if upcoming == 0 else self.timeline.lines[upcoming - 1].end_us
-                    until = self.timeline.lines[upcoming].start_us - now_us
-                    if (
-                        self.countdown
-                        and self.timeline.lines[upcoming].start_us - gap_start >= 3_000_000
-                        and 0 < until <= 3_000_000
-                    ):
+                    countdown_number = karaoke_countdown_number(
+                        gap_start,
+                        self.timeline.lines[upcoming].start_us,
+                        now_us,
+                    )
+                    if self.countdown and countdown_number is not None:
                         upcoming_lane = upcoming % 2
                         countdown = (
-                            max(1, min(3, math.ceil(until / 1_000_000))),
+                            countdown_number,
                             self.lane_y[1 - upcoming_lane],
                         )
         for index, is_active in rows:

@@ -13,6 +13,39 @@ export interface ManualLoopRange {
   repeat: boolean;
 }
 
+export interface KaraokeCountdownCue {
+  lane: 0 | 1;
+  nextLineId: string;
+  number: 1 | 2 | 3;
+}
+
+const KARAOKE_COUNTDOWN_US = 3_000_000;
+
+export function karaokeCountdownCue(
+  timeline: Timeline,
+  nowUs: number,
+): KaraokeCountdownCue | null {
+  const upcomingIndex = timeline.lines.findIndex((line) => line.start_us > nowUs);
+  if (upcomingIndex < 0) return null;
+  const upcoming = timeline.lines[upcomingIndex];
+  const gapStartUs = upcomingIndex === 0
+    ? 0
+    : timeline.lines[upcomingIndex - 1].end_us;
+  const gapUs = upcoming.start_us - gapStartUs;
+  const untilUs = upcoming.start_us - nowUs;
+  if (
+    gapUs < KARAOKE_COUNTDOWN_US
+    || nowUs < gapStartUs
+    || untilUs <= 0
+    || untilUs > KARAOKE_COUNTDOWN_US
+  ) return null;
+  return {
+    lane: (1 - (upcomingIndex % 2)) as 0 | 1,
+    nextLineId: upcoming.id,
+    number: Math.max(1, Math.min(3, Math.ceil(untilUs / 1_000_000))) as 1 | 2 | 3,
+  };
+}
+
 export function timeUsToPixels(timeUs: number, pixelsPerSecond: number): number {
   return Math.round((Math.max(0, timeUs) * Math.max(1, pixelsPerSecond)) / 1_000_000);
 }

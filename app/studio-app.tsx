@@ -41,6 +41,7 @@ import {
   highlightPercent,
   insertTimelineLine,
   insertTimelineToken,
+  karaokeCountdownCue,
   manualLineReplayRange,
   manualTransitionReplayRange,
   manualTokenLoopRange,
@@ -1118,7 +1119,18 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 playing={isPlaying}
               />
             )}
-            <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onEnded={() => setIsPlaying(false)} onTimeUpdate={(event) => {
+            <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" onPlay={(event) => {
+              setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
+              setIsPlaying(true);
+            }} onPause={(event) => {
+              setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
+              setIsPlaying(false);
+            }} onEnded={(event) => {
+              setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
+              setIsPlaying(false);
+            }} onSeeked={(event) => {
+              setCurrentTimeUs(Math.round(event.currentTarget.currentTime * 1_000_000));
+            }} onTimeUpdate={(event) => {
               const nowUs = Math.round(event.currentTarget.currentTime * 1_000_000);
               const audition = loopRangeRef.current;
               if (audition && nowUs >= audition.endUs) {
@@ -1139,6 +1151,8 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
             <KaraokeOverlay
               timeline={timeline}
               nowUs={currentTimeUs}
+              mediaRef={videoRef}
+              playing={isPlaying}
             />
           </div>
           <Waveform data={data.waveform?.mix ?? []} nowUs={currentTimeUs} durationUs={timeline.duration_us} onSeek={seek} />
@@ -1384,18 +1398,24 @@ function BackgroundSceneMedia({
 function KaraokeOverlay({
   timeline,
   nowUs,
+  mediaRef,
+  playing,
 }: {
   timeline: Timeline;
   nowUs: number;
+  mediaRef: { readonly current: HTMLVideoElement | null };
+  playing: boolean;
 }) {
-  const active = activeLineAt(timeline, nowUs);
+  const structureNowUs = useKaraokeOverlayClock(timeline, mediaRef, nowUs, playing);
+  const active = activeLineAt(timeline, structureNowUs);
+  const countdown = karaokeCountdownCue(timeline, structureNowUs);
   const rows: { line: LineTiming; active: boolean; lane: number }[] = [];
   if (active !== null) {
     rows.push({ line: timeline.lines[active], active: true, lane: active % 2 });
     if (timeline.lines[active + 1]) rows.push({ line: timeline.lines[active + 1], active: false, lane: (active + 1) % 2 });
   } else {
-    const upcoming = timeline.lines.findIndex((line) => line.start_us > nowUs);
-    if (upcoming >= 0 && timeline.lines[upcoming].start_us - nowUs < 4_500_000) rows.push({ line: timeline.lines[upcoming], active: false, lane: upcoming % 2 });
+    const upcoming = timeline.lines.findIndex((line) => line.start_us > structureNowUs);
+    if (upcoming >= 0 && timeline.lines[upcoming].start_us - structureNowUs < 4_500_000) rows.push({ line: timeline.lines[upcoming], active: false, lane: upcoming % 2 });
   }
   const selectedFont = karaokeFontId(timeline.metadata);
   const selectedColor = karaokeColorId(timeline.metadata);
@@ -1413,23 +1433,108 @@ function KaraokeOverlay({
           className={`preview-lyric lane-${lane} ${isActive ? 'is-active' : ''}`}
           key={line.id}
         >
-          <FittedKaraokeLine line={line} active={isActive} nowUs={nowUs} />
+          <FittedKaraokeLine
+            line={line}
+            active={isActive}
+            nowUs={nowUs}
+            mediaRef={mediaRef}
+            playing={playing}
+          />
         </div>
       ))}
+      {countdown && (
+        <div
+          className={`karaoke-countdown lane-${countdown.lane}`}
+          aria-label={`Đếm ${countdown.number} trước câu hát tiếp theo`}
+          key={`${countdown.nextLineId}-${countdown.number}`}
+        >
+          <strong>{countdown.number}</strong>
+        </div>
+      )}
     </div>
   );
+}
+
+function karaokeOverlayStateKey(timeline: Timeline, nowUs: number): string {
+  const active = activeLineAt(timeline, nowUs);
+  const countdown = karaokeCountdownCue(timeline, nowUs);
+  if (active !== null) return `active:${timeline.lines[active].id}`;
+  if (countdown) return `countdown:${countdown.nextLineId}:${countdown.number}`;
+  const upcoming = timeline.lines.findIndex((line) => line.start_us > nowUs);
+  if (upcoming >= 0 && timeline.lines[upcoming].start_us - nowUs < 4_500_000) {
+    return `upcoming:${timeline.lines[upcoming].id}`;
+  }
+  return 'empty';
+}
+
+function useKaraokeOverlayClock(
+  timeline: Timeline,
+  mediaRef: { readonly current: HTMLVideoElement | null },
+  fallbackNowUs: number,
+  playing: boolean,
+): number {
+  const [structureNowUs, setStructureNowUs] = useState(fallbackNowUs);
+  const stateKeyRef = useRef(karaokeOverlayStateKey(timeline, fallbackNowUs));
+
+  const syncStructure = useCallback((sampledUs: number) => {
+    const nextKey = karaokeOverlayStateKey(timeline, sampledUs);
+    if (nextKey === stateKeyRef.current) return;
+    stateKeyRef.current = nextKey;
+    setStructureNowUs(sampledUs);
+  }, [timeline]);
+
+  useEffect(() => {
+    syncStructure(fallbackNowUs);
+  }, [fallbackNowUs, syncStructure]);
+
+  useEffect(() => {
+    if (!playing) return;
+    let frameId = 0;
+    let active = true;
+    const tick = () => {
+      if (!active) return;
+      const media = mediaRef.current;
+      if (media) {
+        syncStructure(Math.round(media.currentTime * 1_000_000));
+      }
+      frameId = window.requestAnimationFrame(tick);
+    };
+    frameId = window.requestAnimationFrame(tick);
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [mediaRef, playing, syncStructure]);
+
+  return structureNowUs;
 }
 
 function FittedKaraokeLine({
   line,
   active,
   nowUs,
+  mediaRef,
+  playing,
 }: {
   line: LineTiming;
   active: boolean;
   nowUs: number;
+  mediaRef: { readonly current: HTMLVideoElement | null };
+  playing: boolean;
 }) {
   const stackRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLElement>(null);
+  const fallbackNowUsRef = useRef(nowUs);
+
+  const paintHighlight = useCallback((sampledUs: number) => {
+    const highlight = highlightRef.current;
+    if (!highlight) return;
+    const clipRight = Math.max(0, Math.min(100, 100 - highlightPercent(line, sampledUs)));
+    const nextValue = `${clipRight.toFixed(5)}%`;
+    if (highlight.style.getPropertyValue('--karaoke-clip-right') !== nextValue) {
+      highlight.style.setProperty('--karaoke-clip-right', nextValue);
+    }
+  }, [line]);
 
   useLayoutEffect(() => {
     const stack = stackRef.current;
@@ -1456,10 +1561,41 @@ function FittedKaraokeLine({
     };
   }, [line.text]);
 
+  useLayoutEffect(() => {
+    fallbackNowUsRef.current = nowUs;
+    if (active) paintHighlight(nowUs);
+  }, [active, nowUs, paintHighlight]);
+
+  useEffect(() => {
+    if (!active || !playing) return;
+    let frameId = 0;
+    let running = true;
+    const paintFrame = () => {
+      if (!running) return;
+      const media = mediaRef.current;
+      paintHighlight(
+        media ? Math.round(media.currentTime * 1_000_000) : fallbackNowUsRef.current,
+      );
+      frameId = window.requestAnimationFrame(paintFrame);
+    };
+    frameId = window.requestAnimationFrame(paintFrame);
+    return () => {
+      running = false;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [active, mediaRef, paintHighlight, playing]);
+
   return (
     <div className="lyric-stack" ref={stackRef}>
       <span>{line.text}</span>
-      {active && <b style={{ clipPath: `inset(0 ${100 - highlightPercent(line, nowUs)}% 0 0)` }}>{line.text}</b>}
+      {active && (
+        <b
+          ref={highlightRef}
+          style={{ '--karaoke-clip-right': `${100 - highlightPercent(line, nowUs)}%` } as CSSProperties}
+        >
+          {line.text}
+        </b>
+      )}
     </div>
   );
 }
@@ -2096,7 +2232,13 @@ function SongTimelineRoll({
   };
 
   return (
-    <section ref={panelRef} className={`song-roll-panel ${expanded ? 'expanded' : ''}`} role={expanded ? 'dialog' : undefined} aria-modal={expanded || undefined} aria-label={expanded ? 'Timeline Karaoke toàn màn hình' : undefined}>
+    <section
+      ref={panelRef}
+      className={`song-roll-panel ${expanded ? 'expanded' : ''} ${showDetails || expanded ? 'details-open' : ''}`}
+      role={expanded ? 'dialog' : undefined}
+      aria-modal={expanded || undefined}
+      aria-label={expanded ? 'Timeline Karaoke toàn màn hình' : undefined}
+    >
       <div className="song-roll-header">
         <div>
           <span>MAGNETIC LYRIC TIMELINE</span>

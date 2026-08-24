@@ -3,7 +3,20 @@ from __future__ import annotations
 from karaoke_studio.lrc import parse_lrc
 from karaoke_studio.models import SweepCurveV1, SweepPointV1
 from karaoke_studio.motion import evaluate_sweep_ppm
-from karaoke_studio.rendering import KaraokeRenderer, RenderPreset
+from karaoke_studio.rendering import (
+    KaraokeRenderer,
+    RenderPreset,
+    karaoke_countdown_number,
+)
+
+
+def test_countdown_uses_the_final_three_seconds_of_a_real_lyric_gap() -> None:
+    assert karaoke_countdown_number(0, 5_000_000, 1_900_000) is None
+    assert karaoke_countdown_number(0, 5_000_000, 2_100_000) == 3
+    assert karaoke_countdown_number(0, 5_000_000, 3_100_000) == 2
+    assert karaoke_countdown_number(0, 5_000_000, 4_100_000) == 1
+    assert karaoke_countdown_number(0, 5_000_000, 5_000_000) is None
+    assert karaoke_countdown_number(0, 2_900_000, 100_000) is None
 
 
 def test_continuous_highlight_never_moves_backward(test_settings) -> None:
@@ -125,4 +138,5 @@ def test_renderer_uses_timeline_font_without_changing_fixed_size(test_settings) 
     )
 
     assert renderer.font_path.name == "BeVietnamPro-Bold.ttf"
-    assert {asset.font.size for asset in renderer.assets.values()} == {78}
+    assert {asset.font.size for asset in renderer.assets.values()} == {91}
+    assert renderer.lane_y == (122, 238)

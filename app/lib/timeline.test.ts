@@ -11,6 +11,7 @@ import {
   highlightPercent,
   insertTimelineLine,
   insertTimelineToken,
+  karaokeCountdownCue,
   lyricFitScale,
   manualLineReplayRange,
   manualTransitionReplayRange,
@@ -54,6 +55,32 @@ test('active line uses a half-open interval', () => {
   assert.equal(activeLineAt(timeline, 999_999), null);
   assert.equal(activeLineAt(timeline, 1_000_000), 0);
   assert.equal(activeLineAt(timeline, 3_000_000), null);
+});
+
+test('Karaoke countdown exposes 3-2-1 only in the final three seconds of a real gap', () => {
+  const countdownLine = structuredClone(line);
+  countdownLine.start_us += 4_000_000;
+  countdownLine.end_us += 4_000_000;
+  countdownLine.tokens.forEach((token) => {
+    token.start_us += 4_000_000;
+    token.end_us += 4_000_000;
+  });
+  const countdownTimeline: Timeline = {
+    ...structuredClone(timeline),
+    duration_us: 8_000_000,
+    lines: [countdownLine],
+  };
+
+  assert.equal(karaokeCountdownCue(countdownTimeline, 1_900_000), null);
+  assert.deepEqual(karaokeCountdownCue(countdownTimeline, 2_100_000), {
+    lane: 1,
+    nextLineId: 'line-1',
+    number: 3,
+  });
+  assert.equal(karaokeCountdownCue(countdownTimeline, 3_100_000)?.number, 2);
+  assert.equal(karaokeCountdownCue(countdownTimeline, 4_100_000)?.number, 1);
+  assert.equal(karaokeCountdownCue(countdownTimeline, 5_000_000), null);
+  assert.equal(karaokeCountdownCue(timeline, 500_000), null);
 });
 
 test('whole-song roll maps integer microseconds to monotonic pixels', () => {

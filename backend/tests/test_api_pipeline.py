@@ -201,6 +201,7 @@ def test_export_download_and_scoped_delete(
     assert download.status_code == 200
     assert download.content == payload
     assert download.headers["content-disposition"].startswith("attachment;")
+    assert download.headers["cache-control"] == "no-store, max-age=0"
 
     protected_path = project_dir / "work" / "protected.mp4"
     protected_path.parent.mkdir(parents=True, exist_ok=True)
@@ -369,7 +370,7 @@ def test_synthetic_process_render_and_qa(
     assert project_after_early_export.state == ProjectState.NEEDS_REVIEW
     early_report_path = next(
         (store.project_dir(project_id) / "qa").glob(
-            "*-karaoke-unverified-final-source/QA_REPORT.json"
+            "*-karaoke-unverified-final-r*-source/QA_REPORT.json"
         )
     )
     early_report = json.loads(early_report_path.read_text(encoding="utf-8"))
@@ -390,6 +391,7 @@ def test_synthetic_process_render_and_qa(
         state=ProjectState.VERIFIED,
     )
 
+    render_revision = store.load_timeline(project_id).revision
     render_job = JobRecord(
         id="job_render_test",
         project_id=project_id,
@@ -403,7 +405,7 @@ def test_synthetic_process_render_and_qa(
             "mode": "draft",
             "preset": "1080p120",
             "countdown": True,
-            "expected_timeline_revision": store.load_timeline(project_id).revision,
+            "expected_timeline_revision": render_revision,
         },
     )
     store.add_job(render_job)
@@ -418,4 +420,11 @@ def test_synthetic_process_render_and_qa(
     assert draft_report["status"] == "PASS"
     assert draft_report["output_fps"] == 120.0
     assert draft_report["output_fps_ratio"] == "120/1"
+    assert f"-r{render_revision:05d}-1080p120.mp4" in draft_report["output"]
+    assert draft_report["playback_timing"]["status"] == "PASS"
+    assert draft_report["playback_timing"]["packet_count"] == 480
+    assert draft_report["playback_timing"]["pts_equals_dts"] is True
+    assert draft_report["playback_timing"]["packet_duration_ticks"] == 1000
+    assert draft_report["playback_timing"]["expected_packet_duration_ticks"] == 1000
+    assert draft_report["playback_timing"]["starts_at_zero"] is True
     assert draft_report["karaoke_color"] == "red"

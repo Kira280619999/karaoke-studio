@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from fractions import Fraction
 from pathlib import Path
@@ -11,6 +12,103 @@ from .motion import line_progress_ppm
 from .settings import Settings
 from .styles import normalize_karaoke_color_id
 from .timeline import validate_timeline
+
+
+def high_frame_rate_packet_qa(
+    output: Path,
+    output_info,
+    timeline: TimelineV1,
+    settings: Settings,
+) -> dict[str, bool | int | str | None]:
+    """Prove an explicit CFR packet clock without decode-time reordering."""
+    required = output_info.fps_float > 60.0
+    output_fps = Fraction(output_info.fps)
+    expected_frames = math.ceil(
+        timeline.duration_us
+        * output_fps.numerator
+        / (1_000_000 * output_fps.denominator)
+    )
+    try:
+        frame_ticks = Fraction(1, 1) / output_fps / Fraction(output_info.video_time_base)
+        expected_packet_duration_ticks = (
+            frame_ticks.numerator if frame_ticks.denominator == 1 else None
+        )
+    except (ValueError, ZeroDivisionError):
+        expected_packet_duration_ticks = None
+    report: dict[str, bool | int | str | None] = {
+        "status": "NOT_REQUIRED",
+        "required": required,
+        "expected_frames": expected_frames,
+        "packet_count": output_info.video_frames,
+        "constant_frame_rate": not output_info.variable_frame_rate,
+        "no_b_frame_reordering": output_info.video_has_b_frames == 0,
+        "pts_equals_dts": None,
+        "monotonic_pts": None,
+        "monotonic_dts": None,
+        "constant_packet_duration": None,
+        "packet_duration_ticks": None,
+        "expected_packet_duration_ticks": expected_packet_duration_ticks,
+        "starts_at_zero": None,
+        "time_base": output_info.video_time_base,
+        "profile": output_info.video_profile,
+        "level": output_info.video_level,
+    }
+    if not required:
+        return report
+    packet_result = run(
+        [
+            settings.ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pts,dts,duration",
+            "-of",
+            "csv=p=0",
+            str(output),
+        ]
+    )
+    packets: list[tuple[int, int, int]] = []
+    for row in packet_result.stdout.splitlines():
+        values = row.strip().split(",")
+        if len(values) != 3 or any(value in {"", "N/A"} for value in values):
+            continue
+        packets.append(tuple(int(value) for value in values))
+    pts = [packet[0] for packet in packets]
+    dts = [packet[1] for packet in packets]
+    durations = [packet[2] for packet in packets]
+    report.update(
+        {
+            "packet_count": len(packets),
+            "pts_equals_dts": bool(packets) and pts == dts,
+            "monotonic_pts": bool(packets)
+            and all(left < right for left, right in zip(pts, pts[1:], strict=False)),
+            "monotonic_dts": bool(packets)
+            and all(left < right for left, right in zip(dts, dts[1:], strict=False)),
+            "constant_packet_duration": bool(durations) and len(set(durations)) == 1,
+            "packet_duration_ticks": durations[0] if durations else None,
+            "starts_at_zero": bool(packets) and pts[0] == dts[0] == 0,
+        }
+    )
+    passed = all(
+        (
+            report["constant_frame_rate"],
+            report["no_b_frame_reordering"],
+            report["pts_equals_dts"],
+            report["monotonic_pts"],
+            report["monotonic_dts"],
+            report["constant_packet_duration"],
+            report["starts_at_zero"],
+            bool(durations)
+            and expected_packet_duration_ticks is not None
+            and durations[0] == expected_packet_duration_ticks,
+            len(packets) == expected_frames,
+        )
+    )
+    report["status"] = "PASS" if passed else "FAIL"
+    return report
 
 
 def run_final_qa(
@@ -42,6 +140,9 @@ def run_final_qa(
     except (ValueError, ZeroDivisionError):
         pass
     motion_report = motion_qa(qa_timeline)
+    playback_timing = high_frame_rate_packet_qa(
+        output, output_info, timeline, settings
+    )
     run([settings.ffmpeg, "-v", "error", "-i", str(output), "-f", "null", "-"])
     qa_dir = project_dir / "qa" / output.stem
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +181,7 @@ def run_final_qa(
         and duration_delta_us <= frame_us
         and av_duration_delta_us is not None
         and av_duration_delta_us <= frame_us
+        and playback_timing["status"] in {"PASS", "NOT_REQUIRED"}
     )
     advisory_reasons: list[str] = []
     if mode == "final" and not timing_verified:
@@ -117,6 +219,7 @@ def run_final_qa(
         "av_duration_delta_us": av_duration_delta_us,
         "timeline_issues": [issue.model_dump(mode="json") for issue in timeline_issues],
         "motion_qa": motion_report,
+        "playback_timing": playback_timing,
         "audio_mode": (
             "source_mix_with_vocal"
             if mode == "draft"

@@ -183,6 +183,59 @@ def resolve_preset(name: str, project: ProjectRecord) -> RenderPreset:
     return RenderPreset(1920, 1080, 60, 1)
 
 
+def _video_encoding_args(preset: RenderPreset) -> list[str]:
+    """Return deterministic CFR encoding options for the requested frame grid.
+
+    High-frame-rate MP4 is deliberately encoded without B-frame reordering to
+    make its playback clock simpler for HFR players and editing applications.
+    A 120 kHz track clock gives every 120 fps frame exactly 1,000 ticks.
+    """
+    args = [
+        "-fps_mode",
+        "cfr",
+        "-r",
+        preset.ffmpeg_fps,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "17",
+        "-pix_fmt",
+        "yuv420p",
+        "-color_primaries",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        "-colorspace",
+        "bt709",
+    ]
+    if preset == RenderPreset(1920, 1080, 120, 1):
+        args.extend(
+            [
+                "-profile:v",
+                "high",
+                "-level:v",
+                "5.1",
+                "-bf",
+                "0",
+                "-g",
+                "120",
+                "-keyint_min",
+                "120",
+                "-sc_threshold",
+                "0",
+                "-forced-idr",
+                "1",
+                "-x264-params",
+                "force-cfr=1",
+                "-video_track_timescale",
+                "120000",
+            ]
+        )
+    return args
+
+
 @dataclass
 class RenderedLineRow:
     text: str
@@ -617,7 +670,10 @@ def render_video(
     export_kind = mode
     if mode == "final" and project.state not in {ProjectState.VERIFIED, ProjectState.RENDERED}:
         export_kind = "unverified-final"
-    output = export_dir / f"{_slug(project.title)}-karaoke-{export_kind}-{preset_name}.mp4"
+    output = export_dir / (
+        f"{_slug(project.title)}-karaoke-{export_kind}-"
+        f"r{timeline.revision:05d}-{preset_name}.mp4"
+    )
     log_path = project_dir / "logs" / f"render-{mode}-{preset_name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -685,16 +741,7 @@ def render_video(
         "alimiter=limit=0.8913:level=false:latency=true",
         "-t",
         f"{timeline.duration_us / 1_000_000:.6f}",
-        "-fps_mode",
-        "cfr",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "17",
-        "-pix_fmt",
-        "yuv420p",
+        *_video_encoding_args(preset),
         "-c:a",
         "aac",
         "-b:a",

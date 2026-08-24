@@ -7,7 +7,7 @@ export const EXPORT_PRESET_OPTIONS: ReadonlyArray<{
   label: string;
 }> = [
   { value: '1080p60', label: '1080p · 60fps (khuyên dùng)' },
-  { value: '1080p120', label: '1080p · 120fps (cần player hỗ trợ)' },
+  { value: '1080p120', label: '1080p · 120fps CFR (chính xác)' },
   { value: '1080p30', label: '1080p · 30fps' },
   { value: 'source', label: 'Theo video gốc' },
 ];

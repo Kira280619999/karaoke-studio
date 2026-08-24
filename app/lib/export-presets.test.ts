@@ -13,5 +13,5 @@ test('1080p60 is the compatible default while 120fps remains available', () => {
     EXPORT_PRESET_OPTIONS.map((option) => option.value),
     ['1080p60', '1080p120', '1080p30', 'source'],
   );
-  assert.match(exportPresetLabel('1080p120'), /player/);
+  assert.match(exportPresetLabel('1080p120'), /CFR/);
 });

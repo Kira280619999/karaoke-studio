@@ -559,6 +559,11 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 path,
                 filename=path.name,
                 content_disposition_type="attachment",
+                headers={
+                    "Cache-Control": "no-store, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
             )
         return FileResponse(path)
 

@@ -35,6 +35,11 @@ class MediaInfo:
     has_audio: bool
     audio_duration_us: int | None
     rotation: int
+    video_frames: int | None
+    video_has_b_frames: int
+    video_time_base: str
+    video_profile: str | None
+    video_level: int | None
 
 
 def safe_filename(filename: str, fallback: str) -> str:
@@ -118,6 +123,15 @@ def probe(path: Path, settings: Settings) -> MediaInfo:
         if audio_duration_raw
         else None,
         rotation=rotation,
+        video_frames=(
+            int(video["nb_frames"])
+            if video.get("nb_frames") not in {None, "N/A"}
+            else None
+        ),
+        video_has_b_frames=int(video.get("has_b_frames", 0) or 0),
+        video_time_base=str(video.get("time_base", "0/0")),
+        video_profile=video.get("profile"),
+        video_level=(int(video["level"]) if video.get("level") is not None else None),
     )
 
 

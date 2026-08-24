@@ -9,6 +9,7 @@ from karaoke_studio.rendering import (
     SONG_CREDIT_ACCENT,
     KaraokeRenderer,
     RenderPreset,
+    _video_encoding_args,
     karaoke_countdown_number,
     lyric_display_rows,
     resolve_preset,
@@ -197,6 +198,16 @@ def test_1080p120_preset_is_native_120fps() -> None:
     preset = resolve_preset("1080p120", record)
 
     assert preset == RenderPreset(1920, 1080, 120, 1)
+
+
+def test_1080p120_encoding_has_an_unambiguous_real_time_clock() -> None:
+    args = _video_encoding_args(RenderPreset(1920, 1080, 120, 1))
+
+    assert args[args.index("-r") + 1] == "120/1"
+    assert args[args.index("-fps_mode") + 1] == "cfr"
+    assert args[args.index("-bf") + 1] == "0"
+    assert args[args.index("-video_track_timescale") + 1] == "120000"
+    assert args[args.index("-x264-params") + 1] == "force-cfr=1"
 
 
 def test_1080p60_is_the_compatible_api_default() -> None:

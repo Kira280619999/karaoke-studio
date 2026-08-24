@@ -20,6 +20,7 @@ from karaoke_studio.lrc import parse_lrc
 from karaoke_studio.models import ProjectRecord, ProjectState
 from karaoke_studio.rendering import (
     RenderPreset,
+    _background_motion_filter,
     _custom_background_pipeline,
     render_video,
 )
@@ -55,7 +56,20 @@ def test_background_schedule_prefers_lyric_gaps_and_stays_monotonic() -> None:
     )
     assert all(segment.start_us < segment.end_us for segment in plan.segments)
     assert all(segment.anchor == "lyric_gap" for segment in plan.segments[1:])
-    assert all(100_000 <= segment.transition_us <= 650_000 for segment in plan.segments[1:])
+    assert all(650_000 < segment.transition_us <= 1_800_000 for segment in plan.segments[1:])
+
+
+def test_long_scenes_receive_full_professional_dissolve() -> None:
+    timeline = parse_lrc(
+        "[00:00.00]Câu một\n[00:42.00]Câu hai\n[01:22.00]Câu ba",
+        duration_us=120_000_000,
+    )
+    timeline.lines[0].end_us = 38_000_000
+    timeline.lines[1].end_us = 78_000_000
+
+    plan = schedule_backgrounds([_asset(1), _asset(2), _asset(3)], timeline)
+
+    assert [segment.transition_us for segment in plan.segments] == [0, 1_800_000, 1_800_000]
 
 
 def test_multiple_background_upload_builds_manifest_and_safe_urls(
@@ -143,7 +157,7 @@ def test_custom_background_filter_graph_decodes_crossfade(
     paths = [source_dir / "wide.png", source_dir / "portrait.png"]
     Image.new("RGB", (640, 360), "#112244").save(paths[0])
     Image.new("RGB", (240, 420), "#aa7722").save(paths[1])
-    timeline = parse_lrc("[00:00.00]Một\n[00:01.00]Hai", duration_us=2_000_000)
+    timeline = parse_lrc("[00:00.00]Một\n[00:03.00]Hai", duration_us=6_000_000)
     plan = build_background_plan(paths, timeline, test_settings)
     input_args, graph, count = _custom_background_pipeline(
         plan,
@@ -152,7 +166,8 @@ def test_custom_background_filter_graph_decodes_crossfade(
     )
 
     assert count == 2
-    assert "xfade=transition=fade" in graph
+    assert "xfade=transition=fadeslow" in graph
+    assert graph.count("zoompan=") == 2
     assert "force_original_aspect_ratio=increase" in graph
     subprocess.run(
         [
@@ -166,7 +181,7 @@ def test_custom_background_filter_graph_decodes_crossfade(
             "-map",
             "[bg]",
             "-t",
-            "2",
+            "6",
             "-f",
             "null",
             "-",
@@ -174,6 +189,18 @@ def test_custom_background_filter_graph_decodes_crossfade(
         check=True,
         timeout=30,
     )
+
+
+def test_ken_burns_motion_alternates_direction_and_stays_subtle() -> None:
+    preset = RenderPreset(1920, 1080, 60, 1)
+
+    first = _background_motion_filter(0, preset, 10_000_000)
+    second = _background_motion_filter(1, preset, 10_000_000)
+
+    assert "1.035000+(0.050000)*on/599" in first
+    assert "-0.200000+(0.400000)*on/599" in first
+    assert "1.085000+(-0.040000)*on/599" in second
+    assert "0.550000+(-1.100000)*on/599" in second
 
 
 def test_full_draft_render_uses_multi_scene_background(

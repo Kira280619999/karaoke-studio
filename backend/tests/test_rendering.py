@@ -9,6 +9,7 @@ from karaoke_studio.rendering import (
     KaraokeRenderer,
     RenderPreset,
     karaoke_countdown_number,
+    lyric_display_rows,
     resolve_preset,
     visible_karaoke_rows,
 )
@@ -86,9 +87,7 @@ def test_renderer_uses_selected_sweep_color_without_a_black_lyric_plate(
 ) -> None:
     timeline = parse_lrc("[00:00.00]Ngài là ánh sáng", duration_us=2_000_000)
     timeline.metadata["karaoke_color"] = "red"
-    renderer = KaraokeRenderer(
-        timeline, RenderPreset(1280, 720, 60, 1), test_settings, False, True
-    )
+    renderer = KaraokeRenderer(timeline, RenderPreset(1280, 720, 60, 1), test_settings, False, True)
     asset = renderer.assets[(0, True)]
 
     assert renderer.highlight_color == (255, 54, 87, 255)
@@ -105,12 +104,14 @@ def test_long_vietnamese_line_is_fitted_and_draft_mark_is_visible(test_settings)
     )
     renderer = KaraokeRenderer(timeline, RenderPreset(1920, 1080, 60, 1), test_settings, True, True)
     asset = renderer.assets[(0, True)]
+    assert len(asset.rows) == 2
+    assert " ".join(row.text for row in asset.rows) == timeline.lines[0].text
     assert asset.text_width <= 1920 * 0.88
     image = renderer.frame(1_500_000)
     assert image.getbbox() is not None
 
 
-def test_each_fixed_lane_fits_its_own_text_without_wrapping(test_settings) -> None:
+def test_each_fixed_lane_wraps_long_text_and_fits_every_display_row(test_settings) -> None:
     timeline = parse_lrc(
         "[00:00.00]Ngắn\n"
         "[00:02.00]Lửa chiếu sáng mắt Ngài. Huyết của Chúa chữa lành "
@@ -123,9 +124,27 @@ def test_each_fixed_lane_fits_its_own_text_without_wrapping(test_settings) -> No
     max_width = 1280 * 0.88
     assert short_asset.text_width <= max_width
     assert long_asset.text_width <= max_width
-    assert long_asset.font.size == short_asset.font.size
+    assert long_asset.font.size < short_asset.font.size
     assert short_asset.scale_x == 1
-    assert long_asset.scale_x < 1
+    assert len(short_asset.rows) == 1
+    assert len(long_asset.rows) == 2
+    assert all(row.text_width <= max_width for row in long_asset.rows)
+    assert long_asset.rows[0].end_progress_ppm == long_asset.rows[1].start_progress_ppm
+
+
+def test_display_wrap_uses_the_same_authoritative_text_and_progress_range() -> None:
+    timeline = parse_lrc(
+        "[00:00.00]Bão tố trong đời hồn chúng con luôn nương trong Ngài thôi",
+        duration_us=4_000_000,
+    )
+
+    rows = lyric_display_rows(timeline.lines[0])
+
+    assert len(rows) == 2
+    assert " ".join(row.text for row in rows) == timeline.lines[0].text
+    assert rows[0].start_progress_ppm == 0
+    assert rows[0].end_progress_ppm == rows[1].start_progress_ppm
+    assert rows[1].end_progress_ppm == 1_000_000
 
 
 def test_renderer_uses_exact_same_smoothed_integer_sweep_progress(test_settings) -> None:
@@ -141,9 +160,7 @@ def test_renderer_uses_exact_same_smoothed_integer_sweep_progress(test_settings)
             SweepPointV1(time_us=token.end_us, line_progress_ppm=1_000_000),
         ],
     )
-    renderer = KaraokeRenderer(
-        timeline, RenderPreset(1280, 720, 60, 1), test_settings, True, True
-    )
+    renderer = KaraokeRenderer(timeline, RenderPreset(1280, 720, 60, 1), test_settings, True, True)
     line = timeline.lines[0]
     asset = renderer.assets[(0, True)]
     left = asset.left
@@ -163,17 +180,16 @@ def test_1080p120_preset_is_native_120fps() -> None:
     assert preset == RenderPreset(1920, 1080, 120, 1)
 
 
-def test_renderer_uses_timeline_font_without_changing_fixed_size(test_settings) -> None:
+def test_renderer_uses_timeline_font_and_only_reduces_wrapped_rows(test_settings) -> None:
     timeline = parse_lrc(
         "[00:00.00]Xin Đức Thánh Linh đưa dắt chúng con vững tin nơi Ngài\n"
         "[00:03.00]Nguyện Chúa nắm tay bước qua hiểm nguy",
         duration_us=6_000_000,
     )
     timeline.metadata["karaoke_font"] = "be_vietnam_pro"
-    renderer = KaraokeRenderer(
-        timeline, RenderPreset(1920, 1080, 60, 1), test_settings, True, True
-    )
+    renderer = KaraokeRenderer(timeline, RenderPreset(1920, 1080, 60, 1), test_settings, True, True)
 
     assert renderer.font_path.name == "BeVietnamPro-Bold.ttf"
-    assert {asset.font.size for asset in renderer.assets.values()} == {108}
-    assert renderer.lane_y == (112, 248)
+    assert renderer.assets[(0, True)].font.size == 93
+    assert renderer.assets[(1, True)].font.size == 108
+    assert renderer.lane_y == (90, 270)

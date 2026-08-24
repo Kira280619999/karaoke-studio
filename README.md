@@ -11,7 +11,7 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 ### Chức năng đã có trong v0.1.0
 
 - Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
-- Nền thay thế nhận một hoặc nhiều ảnh/video (tối đa 64 cảnh). App giữ đúng thứ tự tệp người dùng chọn, tự chia toàn bài, ưu tiên dissolve ở khoảng nghỉ/ranh giới câu sau khi AI căn lời, và lưu `background-plan.json` để preview với MP4 xuất ra dùng cùng một lịch cảnh. Ảnh dọc/ngang đều tự phủ kín khung hình; video nền được lặp cục bộ và không thay thế audio đang dùng để kiểm tra timing.
+- Nền thay thế nhận một hoặc nhiều ảnh/video (tối đa 64 cảnh). App giữ đúng thứ tự tệp người dùng chọn, tự chia toàn bài, ưu tiên dissolve điện ảnh đến 1,8 giây ở khoảng nghỉ/ranh giới câu sau khi AI căn lời, và thêm chuyển động Ken Burns nhẹ luân phiên để cảnh tĩnh không bị đứng hình. Preview cập nhật chuyển cảnh theo từng frame; MP4 xuất ra dùng cùng lịch cảnh và cùng hướng chuyển động. Ảnh dọc/ngang đều tự phủ kín khung hình; video nền được lặp cục bộ và không thay thế audio đang dùng để kiểm tra timing.
 - Kiểm tra nguồn bằng `ffprobe`, SHA-256, audio/video stream, duration, rotation và VFR; editor dùng proxy CFR, nguồn gốc không bị sửa.
 - Pipeline tiếp tục được sau gián đoạn nhờ manifest, SQLite WAL, timeline revision và checksum.
 - Adapter tách giọng cho Mel-Band RoFormer qua Audio Separator, `htdemucs_ft`, cùng center-cancel fallback bắt buộc kiểm duyệt.

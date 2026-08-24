@@ -16,7 +16,12 @@ import {
 } from 'react';
 
 import { API_BASE, ApiError, api, assetUrl } from './lib/api';
-import { legacyBackgroundPlan } from './lib/backgrounds';
+import {
+  backgroundMotionFrame,
+  backgroundSceneProgress,
+  legacyBackgroundPlan,
+  smoothBackgroundTransition,
+} from './lib/backgrounds';
 import { JobMonitor } from './lib/job-monitor';
 import {
   KARAOKE_COLORS,
@@ -42,6 +47,7 @@ import {
   insertTimelineLine,
   insertTimelineToken,
   karaokeCountdownCue,
+  karaokeDisplayRows,
   karaokeVisibleLineIndexes,
   manualLineReplayRange,
   manualTransitionReplayRange,
@@ -116,6 +122,7 @@ export default function StudioApp() {
   const [job, setJob] = useState<Job | null>(null);
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const jobMonitorRef = useRef<JobMonitor | null>(null);
   const editorMode = !showCreate && Boolean(
     workspace && !['IMPORTED', 'FAILED'].includes(workspace.project.state),
@@ -259,7 +266,7 @@ export default function StudioApp() {
   };
 
   return (
-    <main className={`app-shell ${editorMode ? 'is-editing' : 'is-create'}`}>
+    <main className={`app-shell ${editorMode ? 'is-editing' : 'is-create'} ${railCollapsed ? 'is-rail-collapsed' : ''}`}>
       <header className="app-header">
         <div className="header-brand-group">
           <span className="window-controls" aria-hidden="true"><i /><i /><i /></span>
@@ -289,7 +296,19 @@ export default function StudioApp() {
 
       <div className="app-body">
         <aside className="project-rail">
-          <p className="rail-label">LIBRARIES / DỰ ÁN</p>
+          <div className="rail-heading">
+            <p className="rail-label">LIBRARIES / DỰ ÁN</p>
+            <button
+              className="project-rail-toggle"
+              type="button"
+              aria-expanded={!railCollapsed}
+              aria-label={railCollapsed ? 'Mở danh sách dự án' : 'Thu gọn danh sách dự án'}
+              title={railCollapsed ? 'Mở danh sách dự án' : 'Thu gọn danh sách dự án'}
+              onClick={() => setRailCollapsed((collapsed) => !collapsed)}
+            >
+              <span aria-hidden="true">{railCollapsed ? '›' : '‹'}</span>
+            </button>
+          </div>
           <button
             className={`rail-project new ${showCreate ? 'active' : ''}`}
             type="button"
@@ -538,7 +557,7 @@ function CreateProject({
                 ))}
               </div>
             )}
-            <p className="background-auto-note"><i>✦</i><span><strong>TỰ DỰNG CHUYỂN CẢNH</strong> Hệ thống chia đều nhịp hình, ưu tiên đổi ở khoảng nghỉ/ranh giới câu và dissolve nhẹ để không làm phân tâm lời Karaoke.</span></p>
+            <p className="background-auto-note"><i>✦</i><span><strong>CHUYỂN CẢNH ĐIỆN ẢNH</strong> Hệ thống ưu tiên khoảng nghỉ/ranh giới câu, dissolve mềm đến 1,8 giây và tạo chuyển động Ken Burns nhẹ để nền luôn sống nhưng không làm phân tâm lời Karaoke.</span></p>
           </div>
         )}
         <label className="license-check"><input type="checkbox" checked={acceptModelLicense} onChange={(event) => setAcceptModelLicense(event.target.checked)} /><span><strong>Dùng Karaoke AI Maximum Accuracy</strong><small>Hai model × hai vocal stem, CC-BY-NC-4.0 cho mục đích phi thương mại. Nếu bỏ chọn, app vẫn chạy energy fallback nhưng không tự Verified.</small></span></label>
@@ -1152,6 +1171,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 plan={data.backgroundPlan}
                 nowUs={currentTimeUs}
                 playing={isPlaying}
+                mediaRef={videoRef}
               />
             )}
             <video className={data.backgroundPlan ? 'monitor-audio-source' : undefined} ref={videoRef} src={videoUrl} preload="metadata" onPlay={(event) => {
@@ -1326,55 +1346,84 @@ function BackgroundPreview({
   plan,
   nowUs,
   playing,
+  mediaRef,
 }: {
   plan: BackgroundPlanV1;
   nowUs: number;
   playing: boolean;
+  mediaRef: { readonly current: HTMLVideoElement | null };
 }) {
+  const sampledUs = useBackgroundPreviewClock(mediaRef, nowUs, playing);
   const assets = useMemo(
     () => new Map(plan.assets.map((asset) => [asset.id, asset])),
     [plan.assets],
   );
   const segmentIndex = Math.max(
     0,
-    plan.segments.findLastIndex((segment) => nowUs >= segment.start_us),
+    plan.segments.findLastIndex((segment) => sampledUs >= segment.start_us),
   );
   const segment = plan.segments[segmentIndex] ?? plan.segments[0];
   if (!segment) return null;
   const asset = assets.get(segment.asset_id);
   if (!asset?.url) return null;
 
-  const transitionProgress = segmentIndex > 0 && segment.transition_us > 0
-    ? Math.max(0, Math.min(1, (nowUs - segment.start_us) / segment.transition_us))
+  const rawTransitionProgress = segmentIndex > 0 && segment.transition_us > 0
+    ? Math.max(0, Math.min(1, (sampledUs - segment.start_us) / segment.transition_us))
     : 1;
+  const transitionProgress = smoothBackgroundTransition(rawTransitionProgress);
   const previousSegment = transitionProgress < 1 ? plan.segments[segmentIndex - 1] : null;
   const previousAsset = previousSegment ? assets.get(previousSegment.asset_id) : null;
-  const segmentProgress = Math.max(
-    0,
-    Math.min(1, (nowUs - segment.start_us) / Math.max(1, segment.end_us - segment.start_us)),
-  );
 
   return (
     <div className="background-preview" aria-label={`Nền tự động cảnh ${segmentIndex + 1} trên ${plan.segments.length}`}>
       {previousSegment && previousAsset?.url && (
         <BackgroundSceneMedia
           asset={previousAsset}
-          localUs={Math.max(0, nowUs - previousSegment.start_us)}
+          localUs={Math.max(0, sampledUs - previousSegment.start_us)}
           opacity={1 - transitionProgress}
           playing={playing}
-          progress={1}
+          progress={backgroundSceneProgress(plan, segmentIndex - 1, sampledUs)}
+          sceneIndex={segmentIndex - 1}
         />
       )}
       <BackgroundSceneMedia
         asset={asset}
-        localUs={Math.max(0, nowUs - segment.start_us)}
+        localUs={Math.max(0, sampledUs - segment.start_us)}
         opacity={transitionProgress}
         playing={playing}
-        progress={segmentProgress}
+        progress={backgroundSceneProgress(plan, segmentIndex, sampledUs)}
+        sceneIndex={segmentIndex}
       />
-      <span className="background-scene-status">SCENE {String(segmentIndex + 1).padStart(2, '0')} / {String(plan.segments.length).padStart(2, '0')} · {segment.anchor === 'lyric_gap' ? 'LYRIC GAP' : 'BALANCED'}</span>
+      <span className="background-scene-status">SCENE {String(segmentIndex + 1).padStart(2, '0')} / {String(plan.segments.length).padStart(2, '0')} · {segment.anchor === 'lyric_gap' ? 'LYRIC GAP' : 'BALANCED'}{segment.transition_us > 0 ? ` · DISSOLVE ${(segment.transition_us / 1_000_000).toFixed(1)}S` : ''}</span>
     </div>
   );
+}
+
+function useBackgroundPreviewClock(
+  mediaRef: { readonly current: HTMLVideoElement | null },
+  fallbackNowUs: number,
+  playing: boolean,
+): number {
+  const [sampledUs, setSampledUs] = useState(fallbackNowUs);
+
+  useEffect(() => {
+    if (!playing) return;
+    let frameId = 0;
+    let active = true;
+    const tick = () => {
+      if (!active) return;
+      const media = mediaRef.current;
+      if (media) setSampledUs(Math.round(media.currentTime * 1_000_000));
+      frameId = window.requestAnimationFrame(tick);
+    };
+    frameId = window.requestAnimationFrame(tick);
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [mediaRef, playing]);
+
+  return playing ? sampledUs : fallbackNowUs;
 }
 
 function BackgroundSceneMedia({
@@ -1383,12 +1432,14 @@ function BackgroundSceneMedia({
   opacity,
   playing,
   progress,
+  sceneIndex,
 }: {
   asset: BackgroundAssetV1;
   localUs: number;
   opacity: number;
   playing: boolean;
   progress: number;
+  sceneIndex: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const source = assetUrl(asset.url ?? '');
@@ -1406,9 +1457,11 @@ function BackgroundSceneMedia({
   }, [asset.source_duration_us, localUs, playing]);
 
   useEffect(syncVideo, [syncVideo]);
+  const motion = backgroundMotionFrame(sceneIndex, progress);
   const style = {
     opacity,
-    '--background-zoom': String(1 + progress * 0.035),
+    transform: `translate3d(${motion.xPercent.toFixed(4)}%, ${motion.yPercent.toFixed(4)}%, 0) scale(${motion.scale.toFixed(6)})`,
+    transition: 'none',
   } as CSSProperties;
   if (asset.kind === 'image') {
     // The source is a local project file selected at runtime; next/image cannot predeclare it.
@@ -1556,18 +1609,28 @@ function FittedKaraokeLine({
   playing: boolean;
 }) {
   const stackRef = useRef<HTMLDivElement>(null);
-  const highlightRef = useRef<HTMLElement>(null);
+  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const highlightRefs = useRef<Array<HTMLElement | null>>([]);
   const fallbackNowUsRef = useRef(nowUs);
+  const displayRows = useMemo(() => karaokeDisplayRows(line), [line]);
 
   const paintHighlight = useCallback((sampledUs: number) => {
-    const highlight = highlightRef.current;
-    if (!highlight) return;
-    const clipRight = Math.max(0, Math.min(100, 100 - highlightPercent(line, sampledUs)));
-    const nextValue = `${clipRight.toFixed(5)}%`;
-    if (highlight.style.getPropertyValue('--karaoke-clip-right') !== nextValue) {
-      highlight.style.setProperty('--karaoke-clip-right', nextValue);
-    }
-  }, [line]);
+    const progressPpm = Math.round(highlightPercent(line, sampledUs) * 10_000);
+    displayRows.forEach((row, index) => {
+      const highlight = highlightRefs.current[index];
+      if (!highlight) return;
+      const rowProgress = progressPpm <= row.startProgressPpm
+        ? 0
+        : progressPpm >= row.endProgressPpm
+          ? 1
+          : (progressPpm - row.startProgressPpm)
+            / Math.max(1, row.endProgressPpm - row.startProgressPpm);
+      const nextValue = `${((1 - rowProgress) * 100).toFixed(5)}%`;
+      if (highlight.style.getPropertyValue('--karaoke-clip-right') !== nextValue) {
+        highlight.style.setProperty('--karaoke-clip-right', nextValue);
+      }
+    });
+  }, [displayRows, line]);
 
   useLayoutEffect(() => {
     const stack = stackRef.current;
@@ -1576,13 +1639,16 @@ function FittedKaraokeLine({
     let cancelled = false;
     const fit = () => {
       if (cancelled) return;
-      stack.style.setProperty('--lyric-fit-x', '1');
       const horizontalSafeArea = Math.max(16, lane.clientWidth * 0.035);
       const availableWidth = Math.max(1, lane.clientWidth - horizontalSafeArea * 2);
-      stack.style.setProperty(
-        '--lyric-fit-x',
-        String(lyricFitScale(availableWidth, stack.scrollWidth)),
-      );
+      rowRefs.current.forEach((row) => {
+        if (!row) return;
+        row.style.setProperty('--lyric-fit-x', '1');
+        row.style.setProperty(
+          '--lyric-fit-x',
+          String(lyricFitScale(availableWidth, row.scrollWidth)),
+        );
+      });
     };
     fit();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
@@ -1592,7 +1658,7 @@ function FittedKaraokeLine({
       cancelled = true;
       observer?.disconnect();
     };
-  }, [line.text]);
+  }, [displayRows]);
 
   useLayoutEffect(() => {
     fallbackNowUsRef.current = nowUs;
@@ -1619,16 +1685,33 @@ function FittedKaraokeLine({
   }, [active, mediaRef, paintHighlight, playing]);
 
   return (
-    <div className="lyric-stack" ref={stackRef}>
-      <span>{line.text}</span>
-      {active && (
-        <b
-          ref={highlightRef}
-          style={{ '--karaoke-clip-right': `${100 - highlightPercent(line, nowUs)}%` } as CSSProperties}
-        >
-          {line.text}
-        </b>
-      )}
+    <div className={`lyric-stack ${displayRows.length > 1 ? 'is-multiline' : ''}`} ref={stackRef}>
+      {displayRows.map((row, index) => {
+        const progressPpm = Math.round(highlightPercent(line, nowUs) * 10_000);
+        const rowProgress = progressPpm <= row.startProgressPpm
+          ? 0
+          : progressPpm >= row.endProgressPpm
+            ? 1
+            : (progressPpm - row.startProgressPpm)
+              / Math.max(1, row.endProgressPpm - row.startProgressPpm);
+        return (
+          <div
+            className="lyric-stack-row"
+            key={`${line.id}-${index}`}
+            ref={(element) => { rowRefs.current[index] = element; }}
+          >
+            <span>{row.text}</span>
+            {active && (
+              <b
+                ref={(element) => { highlightRefs.current[index] = element; }}
+                style={{ '--karaoke-clip-right': `${(1 - rowProgress) * 100}%` } as CSSProperties}
+              >
+                {row.text}
+              </b>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

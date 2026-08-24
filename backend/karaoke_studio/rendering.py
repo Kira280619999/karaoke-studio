@@ -25,6 +25,7 @@ KARAOKE_COUNTDOWN_US = 3_000_000
 KARAOKE_NEXT_LINE_LEAD_US = 4_500_000
 KARAOKE_INSTRUMENTAL_GAP_US = 1_500_000
 KARAOKE_INSTRUMENTAL_LEAD_US = 1_500_000
+KARAOKE_MAX_ROW_CHARACTERS = 48
 
 
 def karaoke_countdown_number(gap_start_us: int, next_start_us: int, now_us: int) -> int | None:
@@ -61,22 +62,90 @@ def visible_karaoke_rows(timeline: TimelineV1, now_us: int) -> list[tuple[int, b
     )
     if active is not None:
         rows = [(active, True)]
-        if (
-            active + 1 < len(timeline.lines)
-            and timeline.lines[active + 1].start_us - now_us <= lead_us(active + 1)
-        ):
+        if active + 1 < len(timeline.lines) and timeline.lines[
+            active + 1
+        ].start_us - now_us <= lead_us(active + 1):
             rows.append((active + 1, False))
         return rows
     upcoming = next(
         (index for index, line in enumerate(timeline.lines) if line.start_us > now_us),
         None,
     )
-    if (
-        upcoming is not None
-        and timeline.lines[upcoming].start_us - now_us <= lead_us(upcoming)
-    ):
+    if upcoming is not None and timeline.lines[upcoming].start_us - now_us <= lead_us(upcoming):
         return [(upcoming, False)]
     return []
+
+
+@dataclass(frozen=True)
+class LyricDisplayRow:
+    text: str
+    start_progress_ppm: int
+    end_progress_ppm: int
+
+
+def lyric_display_rows(
+    line: LineTiming,
+    font: ImageFont.FreeTypeFont | None = None,
+    max_row_characters: int = KARAOKE_MAX_ROW_CHARACTERS,
+) -> list[LyricDisplayRow]:
+    """Split long display text without changing the authoritative lyric."""
+    single = [LyricDisplayRow(line.text, 0, 1_000_000)]
+    if len(line.text.strip()) <= max(1, max_row_characters) or len(line.tokens) < 2:
+        return single
+
+    starts: list[int] = []
+    cursor = 0
+    for token in line.tokens:
+        found = line.text.find(token.text, cursor)
+        start = found if found >= 0 else cursor
+        starts.append(max(cursor, start))
+        cursor = min(len(line.text), starts[-1] + len(token.text))
+    segments = [
+        line.text[
+            0 if index == 0 else starts[index] : starts[index + 1]
+            if index + 1 < len(starts)
+            else len(line.text)
+        ]
+        for index in range(len(starts))
+    ]
+
+    best_index = -1
+    best_score = math.inf
+    for index in range(1, len(segments)):
+        first = "".join(segments[:index]).rstrip()
+        second = "".join(segments[index:]).lstrip()
+        if not first or not second:
+            continue
+        first_length = len(first.strip())
+        second_length = len(second.strip())
+        score = max(first_length, second_length) * 2 + abs(first_length - second_length)
+        if score < best_score:
+            best_index = index
+            best_score = score
+    if best_index < 1:
+        return single
+
+    first_text = "".join(segments[:best_index]).rstrip()
+    second_text = "".join(segments[best_index:]).lstrip()
+    boundary_offset = sum(len(segment) for segment in segments[:best_index])
+    previous_sweep = line.tokens[best_index - 1].sweep
+    next_sweep = line.tokens[best_index].sweep
+    if next_sweep and next_sweep.points:
+        boundary_ppm = next_sweep.points[0].line_progress_ppm
+    elif previous_sweep and previous_sweep.points:
+        boundary_ppm = previous_sweep.points[-1].line_progress_ppm
+    elif font is not None:
+        total_width = max(1e-9, float(font.getlength(line.text)))
+        boundary_ppm = round(
+            float(font.getlength(line.text[:boundary_offset])) * 1_000_000 / total_width
+        )
+    else:
+        boundary_ppm = round(boundary_offset * 1_000_000 / max(1, len(line.text)))
+    boundary_ppm = max(1, min(999_999, boundary_ppm))
+    return [
+        LyricDisplayRow(first_text, 0, boundary_ppm),
+        LyricDisplayRow(second_text, boundary_ppm, 1_000_000),
+    ]
 
 
 @dataclass(frozen=True)
@@ -109,6 +178,20 @@ def resolve_preset(name: str, project: ProjectRecord) -> RenderPreset:
     return RenderPreset(1920, 1080, 60, 1)
 
 
+@dataclass
+class RenderedLineRow:
+    text: str
+    start_progress_ppm: int
+    end_progress_ppm: int
+    natural_text_width: float
+    scale_x: float
+    text_width: float
+    left: float
+    base: Image.Image
+    highlight: Image.Image
+    glow: Image.Image
+
+
 class LineAsset:
     def __init__(
         self,
@@ -122,70 +205,121 @@ class LineAsset:
     ):
         self.line = line
         self.font = font
-        self.natural_text_width = max(1.0, float(font.getlength(line.text)))
-        self.scale_x = min(1.0, (width * 0.88) / self.natural_text_width)
-        self.text_width = self.natural_text_width * self.scale_x
-        self.left = (width - self.text_width) / 2
         self.base = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+        self.highlight = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+        self.glow = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+        display_rows = lyric_display_rows(line, font)
+        row_spacing = round(font.size * 0.9)
+        row_y_values = (
+            [y] if len(display_rows) == 1 else [y - row_spacing // 2, y + row_spacing // 2]
+        )
         stroke_width = max(4, round(font.size * 0.075))
         shadow_offset = max(3, round(font.size * 0.065))
-        self._paste_text_layer(
-            self.base,
-            y + shadow_offset,
-            KARAOKE_SHADOW,
-            stroke_width=stroke_width,
-            stroke_fill=KARAOKE_SHADOW,
-        )
-        self._paste_text_layer(
-            self.base,
-            y,
-            WHITE if active else PREVIEW,
-            stroke_width=stroke_width,
-            stroke_fill=KARAOKE_SHADOW,
-        )
-        self.highlight = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
-        self._paste_text_layer(
-            self.highlight,
-            y + shadow_offset,
-            KARAOKE_SHADOW,
-            stroke_width=stroke_width,
-            stroke_fill=KARAOKE_SHADOW,
-        )
-        self._paste_text_layer(
-            self.highlight,
-            y,
-            highlight_color,
-            stroke_width=stroke_width,
-            stroke_fill=WHITE,
-        )
-        color_layer = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
-        self._paste_text_layer(color_layer, y, highlight_color)
-        self.glow = color_layer.filter(
-            ImageFilter.GaussianBlur(max(4, round(font.size * 0.09)))
-        )
+        self.rows: list[RenderedLineRow] = []
+        for display_row, row_y in zip(display_rows, row_y_values, strict=True):
+            natural_width = max(1.0, float(font.getlength(display_row.text)))
+            scale_x = min(1.0, (width * 0.88) / natural_width)
+            text_width = natural_width * scale_x
+            left = (width - text_width) / 2
+            base = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+            self._paste_text_layer(
+                base,
+                display_row.text,
+                natural_width,
+                scale_x,
+                row_y + shadow_offset,
+                KARAOKE_SHADOW,
+                stroke_width=stroke_width,
+                stroke_fill=KARAOKE_SHADOW,
+            )
+            self._paste_text_layer(
+                base,
+                display_row.text,
+                natural_width,
+                scale_x,
+                row_y,
+                WHITE if active else PREVIEW,
+                stroke_width=stroke_width,
+                stroke_fill=KARAOKE_SHADOW,
+            )
+            highlight = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+            self._paste_text_layer(
+                highlight,
+                display_row.text,
+                natural_width,
+                scale_x,
+                row_y + shadow_offset,
+                KARAOKE_SHADOW,
+                stroke_width=stroke_width,
+                stroke_fill=KARAOKE_SHADOW,
+            )
+            self._paste_text_layer(
+                highlight,
+                display_row.text,
+                natural_width,
+                scale_x,
+                row_y,
+                highlight_color,
+                stroke_width=stroke_width,
+                stroke_fill=WHITE,
+            )
+            color_layer = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+            self._paste_text_layer(
+                color_layer,
+                display_row.text,
+                natural_width,
+                scale_x,
+                row_y,
+                highlight_color,
+            )
+            glow = color_layer.filter(ImageFilter.GaussianBlur(max(4, round(font.size * 0.09))))
+            self.base.alpha_composite(base)
+            self.highlight.alpha_composite(highlight)
+            self.glow.alpha_composite(glow)
+            self.rows.append(
+                RenderedLineRow(
+                    display_row.text,
+                    display_row.start_progress_ppm,
+                    display_row.end_progress_ppm,
+                    natural_width,
+                    scale_x,
+                    text_width,
+                    left,
+                    base,
+                    highlight,
+                    glow,
+                )
+            )
+        self.natural_text_width = max(row.natural_text_width for row in self.rows)
+        self.scale_x = min(row.scale_x for row in self.rows)
+        self.text_width = max(row.text_width for row in self.rows)
+        self.left = (width - self.text_width) / 2
 
     def _paste_text_layer(
         self,
         destination: Image.Image,
+        text: str,
+        natural_text_width: float,
+        scale_x: float,
         y: int,
         fill: tuple[int, int, int, int],
         stroke_width: int = 0,
         stroke_fill: tuple[int, int, int, int] | None = None,
     ) -> None:
         margin = max(10, stroke_width + 5)
-        natural_layer_width = max(1, math.ceil(self.natural_text_width) + margin * 2)
+        natural_layer_width = max(1, math.ceil(natural_text_width) + margin * 2)
         layer = Image.new("RGBA", (natural_layer_width, destination.height), (0, 0, 0, 0))
         layer_draw = ImageDraw.Draw(layer)
         layer_draw.text(
             (natural_layer_width / 2, y),
-            self.line.text,
+            text,
             font=self.font,
             anchor="mm",
             fill=fill,
             stroke_width=stroke_width,
             stroke_fill=stroke_fill,
         )
-        fitted_width = max(1, round(natural_layer_width * self.scale_x))
+        fitted_width = max(1, round(natural_layer_width * scale_x))
         if fitted_width != natural_layer_width:
             layer = layer.resize((fitted_width, destination.height), Image.Resampling.LANCZOS)
         destination.alpha_composite(layer, ((destination.width - fitted_width) // 2, 0))
@@ -210,18 +344,22 @@ class KaraokeRenderer:
         self.font_path = resolve_font(settings, self.font_id)
         self.highlight_color = karaoke_color_rgba(timeline.metadata.get("karaoke_color"))
         self.font = load_font(self.font_path, round(self.preset.height * 0.1))
+        self.wrapped_font = load_font(self.font_path, round(self.preset.height * 0.086))
         self.line_fonts: dict[str, ImageFont.FreeTypeFont] = {}
         self.line_scales: dict[str, float] = {}
         self.assets: dict[tuple[int, bool], LineAsset] = {}
-        upper = round(self.overlay_height * 0.31)
-        lower = round(self.overlay_height * 0.69)
+        upper = round(self.overlay_height * 0.25)
+        lower = round(self.overlay_height * 0.75)
         self.lane_y = (upper, lower)
         for index, line in enumerate(timeline.lines):
             y = self.lane_y[index % 2]
-            self.line_fonts[line.id] = self.font
+            line_font = (
+                self.wrapped_font if len(lyric_display_rows(line, self.font)) > 1 else self.font
+            )
+            self.line_fonts[line.id] = line_font
             self.assets[(index, True)] = LineAsset(
                 line,
-                self.font,
+                line_font,
                 y,
                 self.width,
                 self.overlay_height,
@@ -230,7 +368,7 @@ class KaraokeRenderer:
             )
             self.assets[(index, False)] = LineAsset(
                 line,
-                self.font,
+                line_font,
                 y,
                 self.width,
                 self.overlay_height,
@@ -274,38 +412,60 @@ class KaraokeRenderer:
         frame.alpha_composite(asset.base)
         if not active:
             return
-        boundary = round(self._highlight_boundary(asset.line, asset.left, now_us))
-        boundary = max(0, min(self.width, boundary))
-        glow_right = min(self.width, boundary + round(asset.font.size * 0.35))
-        if glow_right > 0:
-            frame.alpha_composite(asset.glow.crop((0, 0, glow_right, self.overlay_height)), (0, 0))
-        if boundary > 0:
-            frame.alpha_composite(
-                asset.highlight.crop((0, 0, boundary, self.overlay_height)), (0, 0)
-            )
+        progress_ppm = self._line_progress_ppm(asset.line, now_us)
+        for row in asset.rows:
+            if progress_ppm <= row.start_progress_ppm:
+                row_progress = 0.0
+            elif progress_ppm >= row.end_progress_ppm:
+                row_progress = 1.0
+            else:
+                row_progress = (progress_ppm - row.start_progress_ppm) / max(
+                    1, row.end_progress_ppm - row.start_progress_ppm
+                )
+            boundary = round(row.left + row.text_width * row_progress)
+            boundary = max(0, min(self.width, boundary))
+            glow_right = min(self.width, boundary + round(asset.font.size * 0.35))
+            if glow_right > 0:
+                frame.alpha_composite(
+                    row.glow.crop((0, 0, glow_right, self.overlay_height)), (0, 0)
+                )
+            if boundary > 0:
+                frame.alpha_composite(
+                    row.highlight.crop((0, 0, boundary, self.overlay_height)), (0, 0)
+                )
 
-    def _highlight_boundary(self, line: LineTiming, left: float, now_us: int) -> float:
-        font = self.line_fonts.get(line.id, self.font)
-        scale_x = self.line_scales.get(line.id, 1.0)
+    def _line_progress_ppm(self, line: LineTiming, now_us: int) -> int:
         if now_us <= line.start_us:
-            return left
+            return 0
+        if now_us >= line.end_us:
+            return 1_000_000
         progress_ppm = line_progress_ppm(line, now_us)
         if progress_ppm is not None:
-            return left + font.getlength(line.text) * scale_x * (progress_ppm / 1_000_000)
+            return max(0, min(1_000_000, progress_ppm))
+        font = self.line_fonts.get(line.id, self.font)
+        total_width = max(1e-9, float(font.getlength(line.text)))
         cursor = 0
         for token in line.tokens:
             found = line.text.find(token.text, cursor)
             token_start = found if found >= 0 else cursor
             token_end = min(len(line.text), token_start + len(token.text))
-            word_left = left + font.getlength(line.text[:cursor]) * scale_x
-            word_right = left + font.getlength(line.text[:token_end]) * scale_x
+            word_left = float(font.getlength(line.text[:cursor]))
+            word_right = float(font.getlength(line.text[:token_end]))
             if now_us < token.start_us:
-                return word_left
+                return round(word_left * 1_000_000 / total_width)
             if now_us <= token.end_us:
                 progress = (now_us - token.start_us) / max(1, token.end_us - token.start_us)
-                return word_left + (word_right - word_left) * max(0.0, min(1.0, progress))
+                boundary = word_left + (word_right - word_left) * max(0.0, min(1.0, progress))
+                return round(boundary * 1_000_000 / total_width)
             cursor = token_end
-        return left + font.getlength(line.text) * scale_x
+        return 1_000_000
+
+    def _highlight_boundary(self, line: LineTiming, left: float, now_us: int) -> float:
+        font = self.line_fonts.get(line.id, self.font)
+        scale_x = self.line_scales.get(line.id, 1.0)
+        return left + font.getlength(line.text) * scale_x * (
+            self._line_progress_ppm(line, now_us) / 1_000_000
+        )
 
     def _draw_countdown(self, frame: Image.Image, number: int, y: int) -> None:
         draw = ImageDraw.Draw(frame)
@@ -511,17 +671,16 @@ def _custom_background_pipeline(
             input_args.extend(["-stream_loop", "-1", "-i", str(path)])
 
         outgoing_transition_us = (
-            plan.segments[index + 1].transition_us
-            if index + 1 < len(plan.segments)
-            else 0
+            plan.segments[index + 1].transition_us if index + 1 < len(plan.segments) else 0
         )
         clip_duration_us = segment.end_us - segment.start_us + outgoing_transition_us
+        motion_filter = _background_motion_filter(index, preset, clip_duration_us)
         filters.append(
             f"[{index}:v]fps={preset.ffmpeg_fps},"
             f"scale={preset.width}:{preset.height}:force_original_aspect_ratio=increase:flags=lanczos,"
-            f"crop={preset.width}:{preset.height},setsar=1,settb=AVTB,"
+            f"crop={preset.width}:{preset.height},setsar=1,"
             f"trim=duration={clip_duration_us / 1_000_000:.6f},"
-            f"setpts=PTS-STARTPTS,format=yuv420p[bg{index}]"
+            f"setpts=PTS-STARTPTS,{motion_filter},settb=AVTB,format=yuv420p[bg{index}]"
         )
 
     chain_label = "bg0"
@@ -529,20 +688,53 @@ def _custom_background_pipeline(
         output_label = f"bgmix{index}"
         if segment.transition_us > 0:
             filters.append(
-                f"[{chain_label}][bg{index}]xfade=transition=fade:"
+                f"[{chain_label}][bg{index}]xfade=transition=fadeslow:"
                 f"duration={segment.transition_us / 1_000_000:.6f}:"
                 f"offset={segment.start_us / 1_000_000:.6f}[{output_label}]"
             )
         else:
-            filters.append(
-                f"[{chain_label}][bg{index}]concat=n=2:v=1:a=0[{output_label}]"
-            )
+            filters.append(f"[{chain_label}][bg{index}]concat=n=2:v=1:a=0[{output_label}]")
         chain_label = output_label
     filters.append(
-        f"[{chain_label}]trim=duration={plan.duration_us / 1_000_000:.6f},"
-        "setpts=PTS-STARTPTS[bg]"
+        f"[{chain_label}]trim=duration={plan.duration_us / 1_000_000:.6f},setpts=PTS-STARTPTS[bg]"
     )
     return input_args, ";".join(filters), len(plan.segments)
+
+
+def _background_motion_filter(
+    scene_index: int,
+    preset: RenderPreset,
+    clip_duration_us: int,
+) -> str:
+    """Return a subtle deterministic Ken Burns move for image and video scenes."""
+    patterns = (
+        (1.035, 1.085, -0.20, 0.20, 0.10, -0.10),
+        (1.085, 1.045, 0.55, -0.55, -0.15, 0.15),
+        (1.045, 1.085, -0.55, 0.55, 0.18, -0.18),
+        (1.090, 1.040, 0.25, -0.25, 0.55, -0.55),
+    )
+    start_zoom, end_zoom, start_x, end_x, start_y, end_y = patterns[
+        abs(scene_index) % len(patterns)
+    ]
+    total_frames = max(
+        2,
+        math.ceil(
+            clip_duration_us
+            * preset.fps_numerator
+            / (1_000_000 * preset.fps_denominator)
+        ),
+    )
+    denominator = total_frames - 1
+    progress = f"on/{denominator}"
+    zoom = f"{start_zoom:.6f}+({end_zoom - start_zoom:.6f})*{progress}"
+    pan_x = f"{start_x:.6f}+({end_x - start_x:.6f})*{progress}"
+    pan_y = f"{start_y:.6f}+({end_y - start_y:.6f})*{progress}"
+    x = f"(iw-iw/zoom)/2*(1+({pan_x}))"
+    y = f"(ih-ih/zoom)/2*(1+({pan_y}))"
+    return (
+        f"zoompan=z='{zoom}':x='{x}':y='{y}':d=1:"
+        f"s={preset.width}x{preset.height}:fps={preset.ffmpeg_fps}"
+    )
 
 
 def render_preview_png(

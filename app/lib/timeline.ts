@@ -19,6 +19,12 @@ export interface KaraokeCountdownCue {
   number: 1 | 2 | 3;
 }
 
+export interface KaraokeDisplayRow {
+  text: string;
+  startProgressPpm: number;
+  endProgressPpm: number;
+}
+
 const KARAOKE_COUNTDOWN_US = 3_000_000;
 
 export function karaokeCountdownCue(
@@ -588,6 +594,75 @@ export function tokenDisplaySegments(line: LineTiming): TokenDisplaySegment[] {
       index + 1 < starts.length ? starts[index + 1] : line.text.length,
     ),
   }));
+}
+
+const KARAOKE_MAX_ROW_CHARACTERS = 48;
+
+function visibleCharacterCount(value: string): number {
+  return Array.from(value.trim()).length;
+}
+
+/**
+ * Split an unusually long lyric at a real token boundary. The source lyric is
+ * never rewritten; these rows are display-only and carry their original sweep
+ * ranges so highlighting finishes row one before it starts row two.
+ */
+export function karaokeDisplayRows(
+  line: LineTiming,
+  maxRowCharacters = KARAOKE_MAX_ROW_CHARACTERS,
+): KaraokeDisplayRow[] {
+  const singleRow = [{
+    text: line.text,
+    startProgressPpm: 0,
+    endProgressPpm: 1_000_000,
+  }];
+  const segments = tokenDisplaySegments(line);
+  if (
+    visibleCharacterCount(line.text) <= Math.max(1, maxRowCharacters)
+    || segments.length < 2
+  ) {
+    return singleRow;
+  }
+
+  let bestIndex = -1;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < segments.length; index += 1) {
+    const first = segments.slice(0, index).map((segment) => segment.text).join('').trimEnd();
+    const second = segments.slice(index).map((segment) => segment.text).join('').trimStart();
+    if (!first || !second) continue;
+    const firstLength = visibleCharacterCount(first);
+    const secondLength = visibleCharacterCount(second);
+    const score = Math.max(firstLength, secondLength) * 2 + Math.abs(firstLength - secondLength);
+    if (score < bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  if (bestIndex < 1) return singleRow;
+
+  const firstText = segments.slice(0, bestIndex).map((segment) => segment.text).join('').trimEnd();
+  const secondText = segments.slice(bestIndex).map((segment) => segment.text).join('').trimStart();
+  const boundaryOffset = segments
+    .slice(0, bestIndex)
+    .reduce((total, segment) => total + segment.text.length, 0);
+  const previousSweep = line.tokens[bestIndex - 1]?.sweep?.points.at(-1);
+  const nextSweep = line.tokens[bestIndex]?.sweep?.points[0];
+  const fallbackBoundary = Math.round(
+    (boundaryOffset * 1_000_000) / Math.max(1, line.text.length),
+  );
+  const boundaryPpm = Math.max(
+    1,
+    Math.min(
+      999_999,
+      nextSweep?.line_progress_ppm
+        ?? previousSweep?.line_progress_ppm
+        ?? fallbackBoundary,
+    ),
+  );
+  return [
+    { text: firstText, startProgressPpm: 0, endProgressPpm: boundaryPpm },
+    { text: secondText, startProgressPpm: boundaryPpm, endProgressPpm: 1_000_000 },
+  ];
 }
 
 export function manualTokenLoopRange(

@@ -27,7 +27,9 @@ BACKGROUND_IMAGE_EXTENSIONS = {
 }
 BACKGROUND_EXTENSIONS = BACKGROUND_VIDEO_EXTENSIONS | BACKGROUND_IMAGE_EXTENSIONS
 MAX_BACKGROUND_ASSETS = 64
-DEFAULT_TRANSITION_US = 650_000
+PROFESSIONAL_DISSOLVE_US = 1_800_000
+BALANCED_DISSOLVE_US = 1_400_000
+MINIMUM_DISSOLVE_US = 600_000
 
 
 class BackgroundAssetV1(BaseModel):
@@ -178,12 +180,17 @@ def schedule_backgrounds(
         else:
             previous_duration = boundaries[index] - boundaries[index - 1]
             current_duration = end_us - start_us
+            target_transition_us = (
+                PROFESSIONAL_DISSOLVE_US
+                if anchors[index] == "lyric_gap"
+                else BALANCED_DISSOLVE_US
+            )
             transition_us = min(
-                DEFAULT_TRANSITION_US,
+                target_transition_us,
                 max(0, previous_duration // 3),
                 max(0, current_duration // 3),
             )
-            if transition_us < 100_000:
+            if transition_us < MINIMUM_DISSOLVE_US:
                 transition_us = 0
         segments.append(
             BackgroundSegmentV1(

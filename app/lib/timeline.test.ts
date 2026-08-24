@@ -13,6 +13,7 @@ import {
   insertTimelineLine,
   insertTimelineToken,
   karaokeCountdownCue,
+  karaokeDisplayRows,
   karaokeVisibleLineIndexes,
   lyricFitScale,
   manualLineReplayRange,
@@ -135,11 +136,43 @@ test('whole-song roll maps integer microseconds to monotonic pixels', () => {
   assert.ok(points.every((point, index) => index === 0 || point >= points[index - 1]));
 });
 
-test('long Karaoke lyric is always scaled into one fixed lane', () => {
+test('each Karaoke display row keeps a safe horizontal fit fallback', () => {
   assert.equal(lyricFitScale(1_200, 900), 1);
   assert.equal(lyricFitScale(1_200, 2_400), 0.5);
   assert.ok(lyricFitScale(1_200, 4_800) > 0);
   assert.ok(lyricFitScale(1_200, 4_800) <= 1);
+});
+
+test('long Karaoke lyric wraps at a word boundary and preserves sweep order', () => {
+  const text = 'Bão tố trong đời hồn chúng con luôn nương trong Ngài thôi';
+  const words = text.split(' ');
+  let cursorUs = 1_000_000;
+  const longLine: LineTiming = {
+    ...structuredClone(line),
+    text,
+    end_us: cursorUs + words.length * 500_000,
+    tokens: words.map((word, index) => {
+      const startUs = cursorUs;
+      cursorUs += 500_000;
+      return {
+        ...structuredClone(line.tokens[0]),
+        id: `long-${index}`,
+        text: word,
+        normalized: word.toLocaleLowerCase('vi'),
+        start_us: startUs,
+        end_us: cursorUs,
+      };
+    }),
+  };
+
+  const rows = karaokeDisplayRows(longLine);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows.map((row) => row.text).join(' '), text);
+  assert.equal(rows[0].startProgressPpm, 0);
+  assert.equal(rows[0].endProgressPpm, rows[1].startProgressPpm);
+  assert.equal(rows[1].endProgressPpm, 1_000_000);
+  assert.ok(rows.every((row) => Array.from(row.text).length < 48));
 });
 
 test('manual marker snap picks only the closest marker inside its threshold', () => {

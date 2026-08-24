@@ -1,0 +1,61 @@
+[project]
+name = "karaoke-studio"
+version = "0.1.0"
+description = "Local, frame-verified MP4 + LRC karaoke production studio"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.116,<1",
+  "numpy>=2.1,<3",
+  "pillow>=11.1,<13",
+  "python-multipart>=0.0.20,<1",
+  "soundfile>=0.13,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+quality = [
+  "audio-separator[cpu]>=0.39,<1",
+  "audioread>=3.0.1,<4",
+  "demucs>=4.0.1,<5",
+  "librosa>=0.10.2,<0.11",
+]
+alignment = [
+  "huggingface-hub>=0.32,<2",
+  "torch>=2.7,<3",
+  "transformers>=4.52,<6",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.0,<2",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+karaoke-studio-api = "karaoke_studio.api:run"
+karaoke-studio-worker = "karaoke_studio.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/karaoke_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["backend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "B008"]

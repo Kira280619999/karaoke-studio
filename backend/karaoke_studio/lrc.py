@@ -17,6 +17,7 @@ class RawLine:
     start_us: int
     text: str
     enhanced: list[tuple[int, str]] = field(default_factory=list)
+    end_us: int | None = None
 
 
 class LRCError(ValueError):
@@ -87,7 +88,19 @@ def parse_lrc(content: str, duration_us: int, fps: int = 60) -> TimelineV1:
                 )
             )
 
-    raw_lines.sort(key=lambda item: item.start_us)
+    return build_timeline(raw_lines, duration_us, fps=fps, metadata=metadata)
+
+
+def build_timeline(
+    raw_lines: list[RawLine],
+    duration_us: int,
+    fps: int = 60,
+    metadata: dict[str, str] | None = None,
+) -> TimelineV1:
+    """Build the shared timeline model without changing supplied lyric text."""
+    if duration_us <= 0:
+        raise LRCError("Video phải có duration lớn hơn 0.")
+    raw_lines = sorted(raw_lines, key=lambda item: item.start_us)
     if not raw_lines:
         raise LRCError("Không tìm thấy dòng lời có timestamp hợp lệ.")
     if raw_lines[0].start_us >= duration_us:
@@ -98,7 +111,12 @@ def parse_lrc(content: str, duration_us: int, fps: int = 60) -> TimelineV1:
     lines: list[LineTiming] = []
     for index, raw in enumerate(raw_lines):
         next_start = raw_lines[index + 1].start_us if index + 1 < len(raw_lines) else duration_us
-        line_end = min(duration_us, max(raw.start_us + 1, next_start))
+        if raw.end_us is not None and raw.end_us <= raw.start_us:
+            raise LRCError("Timestamp kết thúc phải nằm sau timestamp bắt đầu.")
+        requested_end = raw.end_us if raw.end_us is not None else next_start
+        if index + 1 < len(raw_lines):
+            requested_end = min(requested_end, next_start)
+        line_end = min(duration_us, max(raw.start_us + 1, requested_end))
         source = TimingSource.LRC_ENHANCED if raw.enhanced else TimingSource.LRC_LINE
         confidence = 0.97 if raw.enhanced else 0.62
         tokens = _tokens_for_line(raw, line_end, index, source, confidence)
@@ -119,7 +137,7 @@ def parse_lrc(content: str, duration_us: int, fps: int = 60) -> TimelineV1:
         revision=1,
         duration_us=duration_us,
         fps_numerator=fps,
-        metadata=metadata,
+        metadata=metadata or {},
         lines=lines,
     )
 

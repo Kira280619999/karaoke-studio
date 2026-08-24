@@ -1,6 +1,6 @@
 # Karaoke Studio
 
-Karaoke Studio là web app local biến video MP4 và timeline LRC thành video Karaoke hai dòng, quét liên tục và được kiểm chứng theo từng frame. Media được xử lý hoàn toàn trên máy; server chỉ bind `127.0.0.1` và không có telemetry hay cloud upload.
+Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT/TXT thành video Karaoke hai dòng, quét liên tục và được kiểm chứng theo từng frame. Timeline cũng có thể được dán trực tiếp bằng timestamp. Media được xử lý hoàn toàn trên máy; server chỉ bind `127.0.0.1` và không có telemetry hay cloud upload.
 
 > “Verified” không có nghĩa AI tự động chính xác tuyệt đối. Người dùng có thể xuất bất cứ lúc nào; Verified là nhãn chất lượng tùy chọn sau khi nghe A/B và duyệt timing chưa đủ tin cậy.
 
@@ -10,7 +10,7 @@ Karaoke Studio là web app local biến video MP4 và timeline LRC thành video 
 
 ### Chức năng đã có trong v0.1.0
 
-- Import MP4/MOV/MKV/WEBM cùng LRC thường hoặc enhanced LRC; hỗ trợ metadata, nhiều timestamp trên một dòng và `[offset]`.
+- Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
 - Kiểm tra nguồn bằng `ffprobe`, SHA-256, audio/video stream, duration, rotation và VFR; editor dùng proxy CFR, nguồn gốc không bị sửa.
 - Pipeline tiếp tục được sau gián đoạn nhờ manifest, SQLite WAL, timeline revision và checksum.
 - Adapter tách giọng cho Mel-Band RoFormer qua Audio Separator, `htdemucs_ft`, cùng center-cancel fallback bắt buộc kiểm duyệt.
@@ -144,7 +144,7 @@ Lệnh này chạy Python lint, API/unit/integration/synthetic render, web lint,
 
 - Chỉ dùng video, audio, lyrics và artwork mà bạn có quyền sử dụng.
 - Không separator nào bảo đảm xóa sạch mọi giọng hát; người vận hành phải nghe xác nhận.
-- LRC cấp dòng không tự chứa timing âm tiết. AI tạo đề xuất, con người quyết định Final.
+- Timeline cấp dòng không tự chứa timing âm tiết. AI tạo đề xuất timing nhưng không được sửa lời; con người quyết định Final.
 - Source media, stem, database, cache, model và export đều bị `.gitignore` loại trừ.
 - Mỗi dự án trong thanh bên có thao tác xoá hai bước. Khi xác nhận, app dừng job đang chạy và chỉ xoá bản ghi SQLite, video nguồn, stems, lịch sử timeline, QA và exports thuộc UUID dự án đó.
 - Năm font Karaoke hỗ trợ tiếng Việt (Noto Sans, Be Vietnam Pro, Lexend, Barlow Condensed và Baloo 2) được bundle local theo SIL Open Font License trong `backend/karaoke_studio/assets/`. Font được lưu theo dự án; preview và MP4 dùng cùng lựa chọn. Mọi câu giữ nguyên chiều cao, câu dài chỉ nén theo chiều ngang.
@@ -152,7 +152,7 @@ Lệnh này chạy Python lint, API/unit/integration/synthetic render, web lint,
 
 ## English
 
-Karaoke Studio is a local-first MP4 + LRC production suite for deterministic, two-lane Karaoke video. Its Maximum Accuracy profile combines a Vietnamese singing-specific lyric model and an independent speech CTC model across two vocal stems, then refines fast onsets and sustained endings acoustically. Uncertain evidence is routed to human review before a frame-verified render.
+Karaoke Studio is a local-first MP4 + multi-format lyric timeline production suite for deterministic, two-lane Karaoke video. It accepts LRC, SRT, WebVTT, plain timestamp text, and pasted timeline content. Its Maximum Accuracy profile combines a Vietnamese singing-specific lyric model and an independent speech CTC model across two vocal stems, then refines fast onsets and sustained endings acoustically. Uncertain evidence is routed to human review before a frame-verified render.
 
 Quick start:
 
@@ -172,4 +172,4 @@ Open `http://127.0.0.1:3000`. No user media is sent to a cloud service. Review a
 
 ## Release policy
 
-`v0.1.0` for macOS may be tagged only after a real Vietnamese MP4 + LRC supplied by the operator passes the complete QA gate on the target Mac. A Windows x64 release additionally requires the Windows CI runtime gate and one complete native Windows MP4 + LRC production run; simulated Windows tests on macOS are not sufficient. The repository intentionally contains only code, documentation, OFL fonts, the generated social card and synthetic fixtures.
+`v0.1.0` for macOS may be tagged only after a real Vietnamese MP4 + user-supplied timeline passes the complete QA gate on the target Mac. A Windows x64 release additionally requires the Windows CI runtime gate and one complete native Windows production run; simulated Windows tests on macOS are not sufficient. The repository intentionally contains only code, documentation, OFL fonts, the generated social card and synthetic fixtures.

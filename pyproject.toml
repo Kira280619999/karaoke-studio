@@ -1,7 +1,7 @@
 [project]
 name = "karaoke-studio"
 version = "0.1.0"
-description = "Local, frame-verified MP4 + LRC karaoke production studio"
+description = "Local, frame-verified MP4 + multi-format lyric timeline karaoke studio"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = { text = "MIT" }

@@ -271,7 +271,7 @@ export default function StudioApp() {
             type="button"
             onClick={() => setShowCreate(true)}
           >
-            <span>+</span><div><strong>Tạo mới</strong><small>MP4 + LRC</small></div>
+            <span>+</span><div><strong>Tạo mới</strong><small>VIDEO + TIMELINE</small></div>
           </button>
           <div className="project-list">
             {projects.map((project) => {
@@ -372,17 +372,32 @@ function CreateProject({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [videoName, setVideoName] = useState('');
-  const [lrcName, setLrcName] = useState('');
+  const [timelineFileName, setTimelineFileName] = useState('');
+  const [timelineText, setTimelineText] = useState('');
   const [backgroundMode, setBackgroundMode] = useState<'original' | 'custom'>('original');
   const [karaokeFont, setKaraokeFont] = useState<KaraokeFontId>('noto_sans');
   const [acceptModelLicense, setAcceptModelLicense] = useState(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSubmitting(true);
     onError(null);
+    if (!timelineFileName && !timelineText.trim()) {
+      onError('Hãy chọn file timeline hoặc dán nội dung lời có timestamp.');
+      return;
+    }
+    if (timelineFileName && timelineText.trim()) {
+      onError('Chỉ dùng một nguồn timeline: file hoặc nội dung dán.');
+      return;
+    }
+    setSubmitting(true);
     try {
       const payload = new FormData(event.currentTarget);
+      if (timelineText.trim()) {
+        payload.delete('lrc');
+        payload.set('timeline_text', timelineText);
+      } else {
+        payload.delete('timeline_text');
+      }
       payload.set('background_mode', backgroundMode);
       payload.set('karaoke_font', karaokeFont);
       const project = await api<Project>('/api/projects', { method: 'POST', body: payload });
@@ -423,16 +438,39 @@ function CreateProject({
           <strong>{videoName || 'Chọn hoặc thả video MP4'}</strong>
           <small>Nguồn được checksum và giữ nguyên, không rời khỏi máy.</small>
         </label>
-        <label className={`compact-file ${lrcName ? 'selected' : ''}`}>
-          <input
-            required
-            type="file"
-            name="lrc"
-            accept=".lrc,text/plain"
-            onChange={(event) => setLrcName(event.target.files?.[0]?.name ?? '')}
-          />
-          <span>LRC</span><div><strong>{lrcName || 'Timeline lời bài hát'}</strong><small>LRC thường hoặc enhanced LRC</small></div><b>Chọn file</b>
-        </label>
+        <section className="timeline-source" aria-labelledby="timeline-source-title">
+          <div className="timeline-source-heading">
+            <span>TXT</span>
+            <div>
+              <strong id="timeline-source-title">Nguồn timeline lời bài hát</strong>
+              <small>LRC · SRT · VTT · TXT timestamp</small>
+            </div>
+            <b>CHỌN 1 NGUỒN</b>
+          </div>
+          <label className={`timeline-file ${timelineFileName ? 'selected' : ''}`}>
+            <input
+              type="file"
+              name="lrc"
+              accept=".lrc,.srt,.vtt,.txt,text/plain,application/x-subrip,text/vtt"
+              onChange={(event) => setTimelineFileName(event.target.files?.[0]?.name ?? '')}
+            />
+            <span>{timelineFileName || 'Chọn hoặc thả file LRC / SRT / VTT / TXT'}</span>
+            <b>{timelineFileName ? 'Đổi file' : 'Mở file'}</b>
+          </label>
+          <div className="timeline-source-divider"><span>HOẶC DÁN TRỰC TIẾP</span></div>
+          <label className="timeline-paste">
+            <span>Dán nguyên văn timestamp và lời bài hát</span>
+            <textarea
+              name="timeline_text"
+              value={timelineText}
+              onChange={(event) => setTimelineText(event.target.value)}
+              placeholder={'[00:12.50] Lời bài hát\n[00:18.20] Dòng tiếp theo\n\nHoặc dán nguyên khối SRT / WebVTT'}
+              rows={5}
+              spellCheck={false}
+            />
+          </label>
+          <p>Hệ thống giữ nguyên lời bạn nhập; AI chỉ dùng âm thanh để căn timing.</p>
+        </section>
         <div className="form-row">
           <label><span>Tên bài hát</span><input name="title" placeholder="Tự lấy từ tên video nếu để trống" /></label>
           <label><span>Ca sĩ / nguồn</span><input name="artist" placeholder="Không bắt buộc" /></label>

@@ -22,7 +22,6 @@ from .db import RevisionConflict, Store, now_iso
 from .ensemble import evidence_review_issues
 from .fonts import KARAOKE_FONTS, is_karaoke_font_id, normalize_karaoke_font_id
 from .jobs import JobManager
-from .lrc import LRCError, parse_lrc
 from .media import MediaError, probe, safe_filename, sha256_file, tool_capabilities
 from .media import run as run_media
 from .models import (
@@ -43,8 +42,13 @@ from .rendering import render_preview_png
 from .separation import load_candidates
 from .settings import Settings
 from .timeline import validate_timeline
+from .timeline_source import (
+    SUPPORTED_TIMELINE_EXTENSIONS,
+    TimelineSourceError,
+    parse_timeline_source,
+)
 
-MAX_LRC_BYTES = 10 * 1024 * 1024
+MAX_TIMELINE_BYTES = 10 * 1024 * 1024
 MEDIA_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 BACKGROUND_EXTENSIONS = MEDIA_EXTENSIONS | {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -110,8 +114,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects", response_model=ProjectRecord)
     async def create_project(
         video: UploadFile = File(...),
-        lrc: UploadFile = File(...),
+        lrc: UploadFile | None = File(None),
         background: UploadFile | None = File(None),
+        timeline_text: str = Form(""),
         title: str = Form(""),
         artist: str = Form(""),
         background_mode: str = Form("original"),
@@ -120,8 +125,15 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         video_suffix = Path(video.filename or "").suffix.casefold()
         if video_suffix not in MEDIA_EXTENSIONS:
             raise HTTPException(400, "Video phải là MP4/MOV/MKV/WEBM/M4V.")
-        if Path(lrc.filename or "").suffix.casefold() != ".lrc":
-            raise HTTPException(400, "Timeline phải là file .lrc.")
+        has_pasted_timeline = bool(timeline_text.strip())
+        if lrc is not None and has_pasted_timeline:
+            raise HTTPException(400, "Chỉ chọn một nguồn timeline: file hoặc nội dung dán.")
+        if lrc is None and not has_pasted_timeline:
+            raise HTTPException(400, "Hãy chọn file timeline hoặc dán nội dung có timestamp.")
+        if lrc is not None:
+            timeline_suffix = Path(lrc.filename or "").suffix.casefold()
+            if timeline_suffix not in SUPPORTED_TIMELINE_EXTENSIONS:
+                raise HTTPException(400, "Timeline hỗ trợ LRC, SRT, VTT hoặc TXT.")
         if background_mode not in {"original", "custom"}:
             raise HTTPException(400, "background_mode không hợp lệ.")
         if not is_karaoke_font_id(karaoke_font):
@@ -139,16 +151,26 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         source_dir = project_dir / "source"
         source_dir.mkdir(parents=True, exist_ok=False)
         source_name = safe_filename(video.filename or "input.mp4", f"input{video_suffix}")
-        lrc_name = safe_filename(lrc.filename or "lyrics.lrc", "lyrics.lrc")
+        lrc_name = (
+            safe_filename(lrc.filename or "lyrics.lrc", "lyrics.lrc")
+            if lrc is not None
+            else "pasted-timeline.txt"
+        )
         source_path = source_dir / source_name
         lrc_path = source_dir / lrc_name
         background_name: str | None = None
         try:
             await _stream_upload(video, source_path)
-            lrc_bytes = await lrc.read(MAX_LRC_BYTES + 1)
-            if len(lrc_bytes) > MAX_LRC_BYTES:
-                raise HTTPException(413, "File LRC vượt quá 10 MB.")
-            lrc_text = lrc_bytes.decode("utf-8-sig")
+            if lrc is not None:
+                timeline_bytes = await lrc.read(MAX_TIMELINE_BYTES + 1)
+                if len(timeline_bytes) > MAX_TIMELINE_BYTES:
+                    raise HTTPException(413, "File timeline vượt quá 10 MB.")
+                lrc_text = timeline_bytes.decode("utf-8-sig")
+            else:
+                timeline_bytes = timeline_text.encode("utf-8")
+                if len(timeline_bytes) > MAX_TIMELINE_BYTES:
+                    raise HTTPException(413, "Nội dung timeline vượt quá 10 MB.")
+                lrc_text = timeline_text
             lrc_path.write_text(lrc_text, encoding="utf-8")
             if background:
                 background_name = safe_filename(
@@ -156,7 +178,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 )
                 await _stream_upload(background, source_dir / background_name)
             info = probe(source_path, settings)
-            timeline = parse_lrc(lrc_text, info.duration_us)
+            timeline = parse_timeline_source(lrc_text, info.duration_us, filename=lrc_name)
             timeline.metadata["karaoke_font"] = normalize_karaoke_font_id(karaoke_font)
             timestamp = now_iso()
             record = ProjectRecord(
@@ -183,7 +205,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         except HTTPException:
             shutil.rmtree(project_dir, ignore_errors=True)
             raise
-        except (UnicodeDecodeError, LRCError, MediaError) as exc:
+        except (UnicodeDecodeError, TimelineSourceError, MediaError) as exc:
             shutil.rmtree(project_dir, ignore_errors=True)
             raise HTTPException(400, str(exc)) from exc
 

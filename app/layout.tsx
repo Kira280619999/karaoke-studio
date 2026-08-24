@@ -16,10 +16,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'http://127.0.0.1:3000'),
   title: 'Karaoke Studio — Karaoke kiểm chứng theo frame',
-  description: 'Biến MP4 và LRC thành video Karaoke local được tách giọng, căn lời và kiểm chứng theo từng frame.',
+  description: 'Biến MP4 và timeline LRC/SRT/VTT thành video Karaoke local được tách giọng, căn lời và kiểm chứng theo từng frame.',
   openGraph: {
     title: 'Karaoke Studio',
-    description: 'MP4 + LRC → Karaoke 1080p60 được kiểm chứng theo frame, xử lý hoàn toàn trên máy.',
+    description: 'MP4 + LRC/SRT/VTT → Karaoke 1080p60 được kiểm chứng theo frame, xử lý hoàn toàn trên máy.',
     images: [{ url: '/og.png', width: 1200, height: 630, alt: 'Karaoke Studio — Frame-Verified Karaoke' }],
     locale: 'vi_VN',
     type: 'website',
@@ -27,7 +27,7 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: 'Karaoke Studio',
-    description: 'MP4 + LRC → Karaoke kiểm chứng theo frame.',
+    description: 'MP4 + timeline đa định dạng → Karaoke kiểm chứng theo frame.',
     images: ['/og.png'],
   },
 };

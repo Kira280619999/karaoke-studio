@@ -12,7 +12,6 @@ from .alignment import (
 )
 from .db import Store
 from .ensemble import align_timeline_ensemble, alignment_policy
-from .lrc import parse_lrc
 from .media import extract_audio, make_proxy, probe, run, sha256_file, waveform_envelope
 from .models import (
     AlignmentEvidenceV1,
@@ -26,6 +25,7 @@ from .qa import motion_qa, run_final_qa
 from .rendering import render_video
 from .separation import load_candidates, separate_candidates, separator_request_signature
 from .settings import Settings
+from .timeline_source import parse_timeline_source
 
 INGEST_MANIFEST_VERSION = 3
 ALIGNMENT_MANIFEST_VERSION = 18
@@ -82,7 +82,9 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
             "Đang sửa timeline theo toàn bộ thời lượng audio của bài hát…",
         )
         lrc_text = (project_dir / "source" / project.lrc_name).read_text(encoding="utf-8")
-        rebuilt = parse_lrc(lrc_text, source_info.duration_us)
+        rebuilt = parse_timeline_source(
+            lrc_text, source_info.duration_us, filename=project.lrc_name
+        )
         timeline = _preserve_reviewed_timing(timeline, rebuilt)
         timeline = store.save_timeline(
             project_id, timeline, expected_revision=store.load_timeline(project_id).revision
@@ -225,7 +227,9 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         )
     else:
         lrc_text = (project_dir / "source" / project.lrc_name).read_text(encoding="utf-8")
-        anchored_timeline = parse_lrc(lrc_text, timeline.duration_us)
+        anchored_timeline = parse_timeline_source(
+            lrc_text, timeline.duration_us, filename=project.lrc_name
+        )
         base_timeline = _preserve_reviewed_timing(timeline, anchored_timeline)
         base_timeline.revision = timeline.revision
         timeline, alignment_evidence, alignment_report = align_timeline_ensemble(

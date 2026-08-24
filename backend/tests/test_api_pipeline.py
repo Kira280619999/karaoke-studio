@@ -53,6 +53,47 @@ def test_import_api_and_path_traversal_guard(test_settings, synthetic_video: Pat
     assert escaped.status_code in {404, 422}
 
 
+def test_import_accepts_srt_file_and_pasted_timestamp_text(
+    test_settings, synthetic_video: Path
+) -> None:
+    client = TestClient(create_app(test_settings))
+    srt = """1
+00:00:00,250 --> 00:00:01,750
+Ngài là ánh sáng
+"""
+    with synthetic_video.open("rb") as video:
+        srt_response = client.post(
+            "/api/projects",
+            files={
+                "video": ("fixture.mp4", video, "video/mp4"),
+                "lrc": ("fixture.srt", srt.encode(), "application/x-subrip"),
+            },
+        )
+    assert srt_response.status_code == 200, srt_response.text
+    srt_project = srt_response.json()
+    assert srt_project["lrc_name"] == "fixture.srt"
+    srt_timeline = client.get(
+        f"/api/projects/{srt_project['id']}/timeline"
+    ).json()["timeline"]
+    assert srt_timeline["metadata"]["timeline_format"] == "srt"
+    assert srt_timeline["lines"][0]["text"] == "Ngài là ánh sáng"
+
+    with synthetic_video.open("rb") as video:
+        pasted_response = client.post(
+            "/api/projects",
+            data={"timeline_text": "00:00.50 Lời dán trực tiếp"},
+            files={"video": ("fixture.mp4", video, "video/mp4")},
+        )
+    assert pasted_response.status_code == 200, pasted_response.text
+    pasted_project = pasted_response.json()
+    assert pasted_project["lrc_name"] == "pasted-timeline.txt"
+    pasted_timeline = client.get(
+        f"/api/projects/{pasted_project['id']}/timeline"
+    ).json()["timeline"]
+    assert pasted_timeline["metadata"]["timeline_format"] == "timestamp"
+    assert pasted_timeline["lines"][0]["text"] == "Lời dán trực tiếp"
+
+
 def test_font_assets_and_invalid_import_font(test_settings, synthetic_video: Path) -> None:
     client = TestClient(create_app(test_settings))
     for font_id in ("noto_sans", "be_vietnam_pro", "lexend", "barlow_condensed", "baloo_2"):

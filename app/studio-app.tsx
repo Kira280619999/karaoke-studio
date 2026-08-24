@@ -473,7 +473,7 @@ function CreateProject({
   const [backgroundFiles, setBackgroundFiles] = useState<File[]>([]);
   const [karaokeFont, setKaraokeFont] = useState<KaraokeFontId>('noto_sans');
   const [karaokeColor, setKaraokeColor] = useState<KaraokeColorId>('yellow');
-  const [acceptModelLicense, setAcceptModelLicense] = useState(false);
+  const [acceptModelLicense, setAcceptModelLicense] = useState(true);
 
   const rebuildBatchSongs = (videos: File[], timelines: File[]) => {
     const previous = new Map(batchSongs.map((song) => [song.id, song]));

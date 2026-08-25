@@ -1,5 +1,18 @@
 # Third-party notices
 
+## Audio Separator and locally downloaded stem models
+
+Karaoke Studio invokes [Audio Separator](https://github.com/nomadkaraoke/python-audio-separator),
+which is licensed under the MIT License, to run Mel-Band RoFormer and
+BS-RoFormer ViperX 1297 locally.
+
+The ViperX checkpoint `model_bs_roformer_ep_317_sdr_12.9755.ckpt` and its
+configuration are downloaded by Audio Separator on first use. Karaoke Studio
+records their hashes for reproducibility but does not redistribute those model
+files in this repository or its GitHub Release. Model authors and upstream
+download hosts retain their own terms; users must review those terms for their
+intended use.
+
 ## Vietnamese lyric-alignment model adapter
 
 `backend/karaoke_studio/lyric_model.py` implements the checkpoint-compatible

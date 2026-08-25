@@ -13,11 +13,8 @@ export function selectedInstrumentalArtifact(
   ) ?? null;
 }
 
-export function preferredPreviewAudioMode(
-  candidateId: string | null,
-  artifacts: Artifact[],
-): PreviewAudioMode {
-  return selectedInstrumentalArtifact(candidateId, artifacts) ? 'instrumental' : 'original';
+export function preferredPreviewAudioMode(): PreviewAudioMode {
+  return 'original';
 }
 
 export function previewWaveformFor(

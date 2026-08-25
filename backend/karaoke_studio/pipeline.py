@@ -137,20 +137,30 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         context.emit(0.42, "Đã khôi phục stem candidate đúng engine từ lần chạy trước.")
     else:
         candidates = separate_candidates(mix, project_dir, settings, quality, context.emit)
+    # ViperX is export-only: keep the exact pre-existing candidate order and
+    # engines for lyric alignment/timing.
+    analysis_candidates = [
+        candidate for candidate in candidates if candidate.id != "bs_roformer_viperx_1297"
+    ]
     preferred = next(
-        (candidate for candidate in candidates if candidate.production_grade), candidates[0]
+        (candidate for candidate in analysis_candidates if candidate.production_grade),
+        analysis_candidates[0] if analysis_candidates else candidates[0],
     )
-    keep_selection = (
-        reusable_stems
-        and project.selected_instrumental is not None
-        and any(candidate.id == project.selected_instrumental for candidate in candidates)
+    export_default = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.id == "bs_roformer_viperx_1297"
+            and candidate.production_grade
+            and Path(candidate.instrumental).is_file()
+        ),
+        preferred,
     )
-    selected_instrumental = project.selected_instrumental if keep_selection else preferred.id
     project = store.update_project(
         project_id,
         state=ProjectState.SEPARATED,
-        selected_instrumental=selected_instrumental,
-        instrumental_confirmed=project.instrumental_confirmed if keep_selection else False,
+        selected_instrumental=export_default.id,
+        instrumental_confirmed=export_default.id == "bs_roformer_viperx_1297",
         error=None,
     )
 
@@ -172,7 +182,9 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         alignment_candidates.extend(
             candidate
             for candidate in candidates
-            if candidate.production_grade and candidate.id != preferred.id
+            if candidate.production_grade
+            and candidate.id != preferred.id
+            and candidate.id != "bs_roformer_viperx_1297"
         )
     alignment_candidates = alignment_candidates[:2]
     vocal_inputs: dict[str, Path] = {}

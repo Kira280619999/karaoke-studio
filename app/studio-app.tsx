@@ -747,10 +747,16 @@ function CreateProject({
               </label>
               <p>Hệ thống giữ nguyên lời bạn nhập; AI chỉ dùng âm thanh để căn timing.</p>
             </section>
-            <div className="form-row">
-              <label><span>Tên bài hát</span><input name="title" placeholder="Tự lấy từ tên video nếu để trống" /></label>
-              <label><span>Ca sĩ / nguồn</span><input name="artist" placeholder="Không bắt buộc" /></label>
-            </div>
+            <section className="song-identity" aria-label="Thông tin hiển thị trên video Karaoke">
+              <div className="song-identity-heading">
+                <div><strong>Thông tin bài hát</strong><small>Hiện trong 5 giây đầu video</small></div>
+                <span>TỰ LẤY TỪ TÊN FILE NẾU ĐỂ TRỐNG</span>
+              </div>
+              <div className="form-row song-identity-fields">
+                <label><span>Tên bài hát</span><input name="title" placeholder="Nhập tên bài hát" /></label>
+                <label><span>Tên ca sĩ / nguồn</span><input name="artist" placeholder="Nhập tên ca sĩ hoặc nguồn phát hành" /></label>
+              </div>
+            </section>
           </>
         ) : (
           <>
@@ -953,7 +959,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewerVolume, setViewerVolume] = useState(1);
   const [previewAudioMode, setPreviewAudioMode] = useState<PreviewAudioMode>(() => (
-    preferredPreviewAudioMode(data.project.selected_instrumental, data.artifacts)
+    preferredPreviewAudioMode()
   ));
   const [preset, setPreset] = useState<ExportPreset>(DEFAULT_EXPORT_PRESET);
   const [inspectorTab, setInspectorTab] = useState<'review' | 'audio' | 'text' | 'export'>('review');
@@ -1764,6 +1770,9 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
 }
 
 function CandidateReview({ project, waveform, artifacts, onReload, onError, onSelected }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; onReload: () => Promise<void>; onError: (message: string | null) => void; onSelected: (candidateId: string) => void }) {
+  const viperxCandidate = Object.entries(waveform?.candidates ?? {}).filter(
+    ([candidateId]) => candidateId === 'bs_roformer_viperx_1297',
+  );
   const select = async (candidateId: string) => {
     try {
       await api<Project>(`/api/projects/${project.id}/instrumental`, { method: 'POST', body: JSON.stringify({ candidate_id: candidateId, confirmed: true }) });
@@ -1776,9 +1785,9 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError, onSe
 
   return (
     <section className="candidate-panel">
-      <div><span className="section-kicker">AUDIO A/B</span><h2>Chọn âm thanh Final</h2><p>Viewer mặc định nghe đúng candidate đang chọn. Hãy nghe cùng lời chạy rồi xác nhận; bạn vẫn có thể chuyển sang GỐC để đối chiếu.</p></div>
+      <div><span className="section-kicker">ÂM THANH FINAL</span><h2>BS-RoFormer ViperX 1297</h2><p>ViperX 1297 là bản Karaoke mặc định duy nhất để Preview và xuất Final. Không cần tạo hay chọn thêm candidate khác.</p></div>
       <div className="candidate-list">
-        {Object.entries(waveform?.candidates ?? {}).map(([candidateId, candidate]) => {
+        {viperxCandidate.map(([candidateId, candidate]) => {
           const artifact = selectedInstrumentalArtifact(candidateId, artifacts);
           const selected = project.selected_instrumental === candidateId;
           return (
@@ -1790,10 +1799,11 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError, onSe
                 });
               }} />}
               {candidate.warning && <p>{candidate.warning}</p>}
-              <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Đã xác nhận ✓' : selected ? 'Xác nhận dùng bản này' : 'Chọn và xác nhận'}</button>
+              <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Mặc định để xuất ✓' : 'Đặt ViperX làm mặc định'}</button>
             </article>
           );
         })}
+        {viperxCandidate.length === 0 && <p>ViperX 1297 chưa sẵn sàng. Hãy bấm Phân tích lại để tạo stem mặc định.</p>}
       </div>
     </section>
   );

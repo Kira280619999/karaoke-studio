@@ -18,11 +18,11 @@ for KARAOKE_COMMAND in uv pnpm ffmpeg ffprobe; do
   fi
 done
 
-if [[ ! -x .venv/bin/uvicorn ]]; then
-  uv sync
+if [[ ! -x .venv/bin/uvicorn || ! -x .venv/bin/audio-separator ]]; then
+  uv sync --frozen --dev --extra quality --extra alignment
 fi
 if [[ ! -d node_modules ]]; then
-  pnpm install
+  pnpm install --frozen-lockfile
 fi
 
 KARAOKE_API_PID=""

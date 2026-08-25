@@ -42,10 +42,8 @@ test('selected instrumental preview resolves the exact selected stem', () => {
   assert.equal(selectedInstrumentalArtifact(null, artifacts), null);
 });
 
-test('viewer defaults to final instrumental only when its media exists', () => {
-  assert.equal(preferredPreviewAudioMode('center_cancel', artifacts), 'instrumental');
-  assert.equal(preferredPreviewAudioMode('missing', artifacts), 'original');
-  assert.equal(preferredPreviewAudioMode(null, artifacts), 'original');
+test('viewer always defaults to the original mix', () => {
+  assert.equal(preferredPreviewAudioMode(), 'original');
 });
 
 test('waveform follows the audio source that the viewer is actually playing', () => {

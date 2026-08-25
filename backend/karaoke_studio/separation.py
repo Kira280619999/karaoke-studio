@@ -92,6 +92,12 @@ class AudioSeparatorAdapter(SeparatorAdapter):
         )
 
 
+class BsRoformerAdapter(AudioSeparatorAdapter):
+    id = "bs_roformer_viperx_1297"
+    label = "BS-RoFormer ViperX 1297"
+    model = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+
+
 class DemucsAdapter(SeparatorAdapter):
     id = "htdemucs_ft"
     label = "HTDemucs Fine-tuned"
@@ -214,6 +220,14 @@ def separate_candidates(
     for index, adapter in enumerate(selected):
         event(0.24 + 0.30 * index / max(1, len(selected)), f"Đang tách giọng bằng {adapter.label}…")
         candidate_dir = project_dir / "work" / "stems" / adapter.id
+        restored = _restore_existing_candidate(adapter, candidate_dir)
+        if restored is not None:
+            candidates.append(restored)
+            event(
+                0.24 + 0.30 * index / max(1, len(selected)),
+                f"Đã khôi phục stem {adapter.label} từ lần phân tích trước.",
+            )
+            continue
         try:
             candidates.append(adapter.separate(mix, candidate_dir, settings))
         except Exception as exc:  # adapters are intentionally isolated
@@ -243,6 +257,8 @@ def separate_candidates(
 
 
 def selected_adapters(quality: str) -> list[SeparatorAdapter]:
+    # Preserve the original analysis profile, then prepare ViperX separately as
+    # the single default Final stem. Pipeline alignment deliberately ignores it.
     adapters: list[SeparatorAdapter] = [AudioSeparatorAdapter(), DemucsAdapter()]
     selected = [adapter for adapter in adapters if adapter.available()]
     if quality == "balanced":
@@ -253,7 +269,33 @@ def selected_adapters(quality: str) -> list[SeparatorAdapter]:
         selected.append(CenterCancelAdapter())
     if not selected:
         selected = [CenterCancelAdapter()]
+    viperx = BsRoformerAdapter()
+    if viperx.available():
+        selected.append(viperx)
     return selected
+
+
+def _restore_existing_candidate(
+    adapter: SeparatorAdapter, output_dir: Path
+) -> StemCandidate | None:
+    instrumental = output_dir / "instrumental.wav"
+    vocals = output_dir / "vocals.wav"
+    if not instrumental.is_file() or not vocals.is_file():
+        return None
+    fallback = isinstance(adapter, CenterCancelAdapter)
+    return StemCandidate(
+        id=adapter.id,
+        label=adapter.label,
+        engine=adapter.id,
+        instrumental=str(instrumental),
+        vocals=str(vocals),
+        production_grade=not fallback,
+        warning=(
+            "Fallback center-cancel không phải AI separation; bắt buộc nghe và xác nhận trước Final."
+            if fallback
+            else None
+        ),
+    )
 
 
 def separator_request_signature(quality: str) -> dict[str, object]:
@@ -320,6 +362,10 @@ def _model_manifests(
         / "models"
         / "audio-separator"
         / f"{AudioSeparatorAdapter.model}.manifest.json",
+        "bs_roformer_viperx_1297": settings.data_dir
+        / "models"
+        / "audio-separator"
+        / f"{BsRoformerAdapter.model}.manifest.json",
         "htdemucs_ft": settings.data_dir / "models" / "demucs" / "htdemucs_ft.manifest.json",
     }
     manifests: dict[str, object] = {}

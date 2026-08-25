@@ -8,7 +8,7 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 
 ## Tiếng Việt
 
-### Chức năng đã có trong v0.1.4
+### Chức năng đã có trong v0.1.5
 
 - Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
 - Batch Studio nhận tối đa 12 video và 12 timeline trong một lượt, tự ghép theo tên file tiếng Việt (hoặc theo thứ tự chọn khi số lượng khớp), tự điền tên bài từ tên video và cho sửa riêng tên bài/ca sĩ trước khi chạy. Hai bài được xử lý song song; phần còn lại tự xếp hàng để giữ máy ổn định, đồng thời từng hàng hiển thị tiến độ và cho mở project ngay khi hoàn tất.
@@ -29,6 +29,8 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 - QA bắt buộc full-decode MP4, kiểm tra duration A/V trong một frame, timeline invariants, SHA-256 và ảnh đại diện trong `QA_REPORT.json`.
 
 ### Cài đặt
+
+Người dùng mới nên làm theo [Hướng dẫn tải và cài đặt đầy đủ](HUONG_DAN_CAI_DAT_DAY_DU.md). Tài liệu này có link Release chính thức, kiểm tra SHA-256, cài đặt macOS/Windows, tải model lần đầu, khởi động và xử lý lỗi thường gặp.
 
 Yêu cầu: macOS/Linux/Windows, RAM từ 16 GB cho profile Maximum, Python 3.12, Node.js 22+, [uv](https://docs.astral.sh/uv/), pnpm, FFmpeg và FFprobe. Xem [số đo RAM thực tế](docs/RAM_REQUIREMENTS.md).
 

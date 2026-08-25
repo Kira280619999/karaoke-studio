@@ -1,6 +1,6 @@
 [project]
 name = "karaoke-studio"
-version = "0.1.4"
+version = "0.1.5"
 description = "Local, frame-verified MP4 + multi-format lyric timeline karaoke studio"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

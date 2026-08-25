@@ -494,7 +494,10 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             if not root.exists():
                 continue
             for path in root.rglob("*"):
-                if kind == "proxy" and "stems" in path.relative_to(root).parts:
+                relative_parts = path.relative_to(root).parts
+                if kind == "proxy" and (
+                    "stems" in relative_parts or "render-staging" in relative_parts
+                ):
                     continue
                 if path.is_file() and path.suffix.casefold() in {
                     ".mp4",

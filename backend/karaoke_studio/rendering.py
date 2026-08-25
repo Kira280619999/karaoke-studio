@@ -650,6 +650,7 @@ def render_video(
     preset_name: str,
     countdown: bool,
     event: EventCallback,
+    output_dir: Path | None = None,
 ) -> Path:
     if mode == "draft":
         audio_input = project_dir / "work" / "mix.wav"
@@ -666,15 +667,15 @@ def render_video(
     timeline.fps_numerator = preset.fps_numerator
     timeline.fps_denominator = preset.fps_denominator
     renderer = KaraokeRenderer(timeline, preset, settings, mode == "draft", countdown)
-    export_dir = project_dir / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
+    render_output_dir = output_dir or project_dir / "exports"
+    render_output_dir.mkdir(parents=True, exist_ok=True)
     export_kind = mode
     if mode == "final" and project.state not in {ProjectState.VERIFIED, ProjectState.RENDERED}:
         export_kind = "unverified-final"
     compatibility_contract = (
         "-hfr-realtime-v1" if preset == RenderPreset(1920, 1080, 120, 1) else ""
     )
-    output = export_dir / (
+    output = render_output_dir / (
         f"{_slug(project.title)}-karaoke-{export_kind}-"
         f"r{timeline.revision:05d}{compatibility_contract}-{preset_name}.mp4"
     )

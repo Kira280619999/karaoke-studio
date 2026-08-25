@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from .alignment import (
@@ -390,27 +391,38 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         raise RuntimeError(
             "Instrumental đã đổi sau khi xếp hàng render; hãy nghe lại và xuất Final mới."
         )
-    output = render_video(
-        project,
-        timeline,
-        store.project_dir(project_id),
-        settings,
-        mode,
-        options.get("preset", "1080p60"),
-        bool(options.get("countdown", True)),
-        context.emit,
-    )
-    report = run_final_qa(
-        output,
-        project,
-        timeline,
-        store.project_dir(project_id),
-        settings,
-        mode,
-        expected_instrumental_id=(
-            str(expected_instrumental_id) if mode == "final" else None
-        ),
-    )
+    project_dir = store.project_dir(project_id)
+    staging_dir = project_dir / "work" / "render-staging" / job_id
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    try:
+        staged_output = render_video(
+            project,
+            timeline,
+            project_dir,
+            settings,
+            mode,
+            options.get("preset", "1080p60"),
+            bool(options.get("countdown", True)),
+            context.emit,
+            output_dir=staging_dir,
+        )
+        published_output = project_dir / "exports" / staged_output.name
+        report = run_final_qa(
+            staged_output,
+            project,
+            timeline,
+            project_dir,
+            settings,
+            mode,
+            expected_instrumental_id=(
+                str(expected_instrumental_id) if mode == "final" else None
+            ),
+            published_output=published_output,
+        )
+        published_output.parent.mkdir(parents=True, exist_ok=True)
+        staged_output.replace(published_output)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
     if project.state == ProjectState.RENDERED:
         next_state = ProjectState.RENDERED
     elif project.state == ProjectState.VERIFIED:
@@ -418,4 +430,4 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
     else:
         next_state = ProjectState.NEEDS_REVIEW
     store.update_project(project_id, state=next_state)
-    context.emit(1.0, f"Xuất video và QA {report['status']}: {output.name}")
+    context.emit(1.0, f"Xuất video và QA {report['status']}: {published_output.name}")

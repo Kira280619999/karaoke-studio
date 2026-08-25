@@ -125,7 +125,9 @@ def run_final_qa(
     settings: Settings,
     mode: str,
     expected_instrumental_id: str | None = None,
+    published_output: Path | None = None,
 ) -> dict:
+    report_output = published_output or output
     timing_verified = project.state in {ProjectState.VERIFIED, ProjectState.RENDERED}
     timeline_issues = validate_timeline(
         timeline,
@@ -151,7 +153,7 @@ def run_final_qa(
         output, output_info, timeline, settings
     )
     run([settings.ffmpeg, "-v", "error", "-i", str(output), "-f", "null", "-"])
-    qa_dir = project_dir / "qa" / output.stem
+    qa_dir = project_dir / "qa" / report_output.stem
     qa_dir.mkdir(parents=True, exist_ok=True)
     representative = []
     if timeline.lines:
@@ -209,7 +211,7 @@ def run_final_qa(
         "status": status,
         "project_id": project.id,
         "source_sha256": project.source_sha256,
-        "output": str(output.relative_to(project_dir)),
+        "output": str(report_output.relative_to(project_dir)),
         "output_sha256": sha256_file(output),
         "full_decode": "PASS",
         "duration_us": output_info.duration_us,

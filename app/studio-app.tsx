@@ -1753,6 +1753,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 <ExportList
                   projectId={data.project.id}
                   artifacts={data.artifacts}
+                  rendering={Boolean(rendering)}
                   onReload={onReload}
                   onError={onError}
                 />
@@ -3215,11 +3216,13 @@ function EngineStatus({ label, ready, detail }: { label: string; ready: boolean;
 function ExportList({
   projectId,
   artifacts,
+  rendering,
   onReload,
   onError,
 }: {
   projectId: string;
   artifacts: Artifact[];
+  rendering: boolean;
   onReload: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
@@ -3252,6 +3255,13 @@ function ExportList({
     }
   };
 
+  if (rendering) {
+    return (
+      <p className="no-exports">
+        Đang xuất và kiểm tra toàn bộ video… Nút tải xuống chỉ xuất hiện sau khi QA hoàn tất.
+      </p>
+    );
+  }
   if (!exports.length) return <p className="no-exports">Chưa có video xuất.</p>;
   return (
     <div className="export-list">

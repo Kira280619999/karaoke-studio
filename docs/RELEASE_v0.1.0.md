@@ -9,6 +9,8 @@ kiểm tra trực tiếp trên macOS bằng video tiếng Việt thực tế.
 - Launcher macOS/Linux `scripts/dev.sh` và Windows `scripts/dev.ps1`.
 - Lockfile Python/Node, font Karaoke tiếng Việt, synthetic fixtures và tài liệu.
 - BS-RoFormer ViperX 1297 làm stem Final mặc định; Preview mặc định nghe GỐC.
+- Video chỉ được đưa vào danh sách tải sau khi render, full decode và QA hoàn tất;
+  bản xuất hợp lệ trước đó không bị ghi đè bởi một lượt render đang chạy hoặc lỗi.
 
 ## Không đóng gói trong bản tải
 

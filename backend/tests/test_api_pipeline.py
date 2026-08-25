@@ -7,6 +7,7 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 
+import karaoke_studio.pipeline as pipeline_module
 from karaoke_studio.api import create_app
 from karaoke_studio.db import Store, now_iso
 from karaoke_studio.models import JobRecord, JobState, ProjectState
@@ -56,6 +57,78 @@ def test_import_api_and_path_traversal_guard(test_settings, synthetic_video: Pat
     assert suggestion.status_code == 409
     escaped = client.get(f"/api/projects/{project['id']}/files/%2e%2e/%2e%2e/README.md")
     assert escaped.status_code in {404, 422}
+
+
+def test_artifacts_hide_in_progress_render_staging(
+    test_settings, synthetic_video: Path
+) -> None:
+    client = TestClient(create_app(test_settings))
+    project = _import_project(client, synthetic_video)
+    project_dir = Store(test_settings).project_dir(project["id"])
+    staged = project_dir / "work" / "render-staging" / "job_active" / "partial.mp4"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_bytes(b"partial")
+    completed = project_dir / "exports" / "completed.mp4"
+    completed.parent.mkdir(parents=True, exist_ok=True)
+    completed.write_bytes(b"complete")
+
+    response = client.get(f"/api/projects/{project['id']}/artifacts")
+    assert response.status_code == 200
+    artifacts = response.json()
+    assert any(item["label"] == "completed.mp4" for item in artifacts)
+    assert all(item["label"] != "partial.mp4" for item in artifacts)
+
+
+def test_render_project_atomically_publishes_after_qa(
+    test_settings, synthetic_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = TestClient(create_app(test_settings))
+    project_payload = _import_project(client, synthetic_video)
+    project_id = project_payload["id"]
+    store = Store(test_settings)
+    project_dir = store.project_dir(project_id)
+    published_output = project_dir / "exports" / "atomic-render.mp4"
+    published_output.parent.mkdir(parents=True, exist_ok=True)
+    published_output.write_bytes(b"previous-valid-export")
+    job = JobRecord(
+        id="job_atomic_publish_test",
+        project_id=project_id,
+        kind="render",
+        state=JobState.RUNNING,
+        progress=0,
+        message="test",
+        created_at=now_iso(),
+        updated_at=now_iso(),
+        options={"mode": "draft", "preset": "source", "countdown": True},
+    )
+    store.add_job(job)
+    qa_observed = False
+
+    def fake_render_video(*args, output_dir: Path | None = None, **kwargs) -> Path:
+        assert output_dir is not None
+        output_dir.mkdir(parents=True, exist_ok=True)
+        staged_output = output_dir / published_output.name
+        staged_output.write_bytes(b"new-fully-rendered-export")
+        return staged_output
+
+    def fake_run_final_qa(
+        output: Path, *args, published_output: Path | None = None, **kwargs
+    ) -> dict:
+        nonlocal qa_observed
+        qa_observed = True
+        assert output.read_bytes() == b"new-fully-rendered-export"
+        assert published_output is not None
+        assert published_output.read_bytes() == b"previous-valid-export"
+        return {"status": "PASS"}
+
+    monkeypatch.setattr(pipeline_module, "render_video", fake_render_video)
+    monkeypatch.setattr(pipeline_module, "run_final_qa", fake_run_final_qa)
+
+    render_project(job.id, project_id, job.options, test_settings)
+
+    assert qa_observed is True
+    assert published_output.read_bytes() == b"new-fully-rendered-export"
+    assert not (project_dir / "work" / "render-staging" / job.id).exists()
 
 
 def test_import_accepts_srt_file_and_pasted_timestamp_text(

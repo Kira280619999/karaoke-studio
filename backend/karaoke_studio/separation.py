@@ -42,7 +42,13 @@ class SeparatorAdapter(ABC):
     def available(self) -> bool: ...
 
     @abstractmethod
-    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate: ...
+    def separate(
+        self,
+        mix: Path,
+        output_dir: Path,
+        settings: Settings,
+        progress: EventCallback | None = None,
+    ) -> StemCandidate: ...
 
 
 class AudioSeparatorAdapter(SeparatorAdapter):
@@ -53,7 +59,13 @@ class AudioSeparatorAdapter(SeparatorAdapter):
     def available(self) -> bool:
         return resolve_executable("audio-separator") is not None
 
-    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+    def separate(
+        self,
+        mix: Path,
+        output_dir: Path,
+        settings: Settings,
+        progress: EventCallback | None = None,
+    ) -> StemCandidate:
         output_dir.mkdir(parents=True, exist_ok=True)
         model_dir = settings.data_dir / "models" / "audio-separator"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -113,12 +125,25 @@ class BsPolarformerAdapter(SeparatorAdapter):
     def available(self) -> bool:
         return polarformer_dependencies_available()
 
-    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+    def separate(
+        self,
+        mix: Path,
+        output_dir: Path,
+        settings: Settings,
+        progress: EventCallback | None = None,
+    ) -> StemCandidate:
         model_path = ensure_polarformer_model(settings.data_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         instrumental = output_dir / "instrumental.wav"
         vocals = output_dir / "vocals.wav"
-        separate_with_polarformer(mix, model_path, instrumental, vocals)
+        separate_with_polarformer(
+            mix,
+            model_path,
+            instrumental,
+            vocals,
+            progress=progress,
+            ffmpeg=settings.ffmpeg,
+        )
         _write_model_manifest(
             model_path.with_suffix(".manifest.json"),
             model_id=POLARFORMER_MODEL_ID,
@@ -151,7 +176,13 @@ class DemucsAdapter(SeparatorAdapter):
 
         return importlib.util.find_spec("demucs") is not None
 
-    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+    def separate(
+        self,
+        mix: Path,
+        output_dir: Path,
+        settings: Settings,
+        progress: EventCallback | None = None,
+    ) -> StemCandidate:
         temporary = output_dir / "demucs-output"
         model_dir = settings.data_dir / "models" / "demucs"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +234,13 @@ class CenterCancelAdapter(SeparatorAdapter):
     def available(self) -> bool:
         return True
 
-    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+    def separate(
+        self,
+        mix: Path,
+        output_dir: Path,
+        settings: Settings,
+        progress: EventCallback | None = None,
+    ) -> StemCandidate:
         output_dir.mkdir(parents=True, exist_ok=True)
         instrumental = output_dir / "instrumental.wav"
         vocals = output_dir / "vocals.wav"
@@ -262,7 +299,9 @@ def separate_candidates(
     candidates: list[StemCandidate] = []
     failures: list[str] = []
     for index, adapter in enumerate(selected):
-        event(0.24 + 0.30 * index / max(1, len(selected)), f"Đang tách giọng bằng {adapter.label}…")
+        adapter_start = 0.24 + 0.30 * index / max(1, len(selected))
+        adapter_span = 0.30 / max(1, len(selected))
+        event(adapter_start, f"Đang tách giọng bằng {adapter.label}…")
         candidate_dir = project_dir / "work" / "stems" / adapter.id
         restored = _restore_existing_candidate(adapter, candidate_dir)
         if restored is not None:
@@ -273,7 +312,16 @@ def separate_candidates(
             )
             continue
         try:
-            candidates.append(adapter.separate(mix, candidate_dir, settings))
+            candidates.append(
+                adapter.separate(
+                    mix,
+                    candidate_dir,
+                    settings,
+                    progress=lambda value, message, start=adapter_start, span=adapter_span: event(
+                        start + span * value, message
+                    ),
+                )
+            )
         except Exception as exc:  # adapters are intentionally isolated
             failures.append(f"{adapter.label}: {exc}")
     polarformer_ready = any(candidate.id == BsPolarformerAdapter.id for candidate in candidates)

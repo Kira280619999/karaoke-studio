@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import gc
 import importlib.util
 import os
 import urllib.request
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
-from .media import MediaError, sha256_file
+from .media import MediaError, run, sha256_file
 
 POLARFORMER_MODEL_ID = "bgkb/bs_polarformer"
 POLARFORMER_REVISION = "9158719ee2173edd480a735764627526506fe4af"
@@ -25,8 +27,13 @@ SAMPLE_RATE = 44_100
 N_FFT = 2_048
 HOP_LENGTH = 512
 WIN_LENGTH = 2_048
-CHUNK_SIZE = 882_000
-NUM_OVERLAP = 2
+# A 20-second ONNX window peaks above 10 GiB on Apple Silicon. Four seconds
+# keeps the same FP32 checkpoint below a practical 24-GB Mac memory budget,
+# while a one-second equal-power overlap hides chunk boundaries.
+STREAM_CHUNK_SECONDS = 4
+STREAM_OVERLAP_SECONDS = 1
+STREAM_MAX_CHUNK_SECONDS = 4
+ORT_THREADS = 4
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -34,7 +41,7 @@ ProgressCallback = Callable[[float, str], None]
 def polarformer_dependencies_available() -> bool:
     return all(
         importlib.util.find_spec(package) is not None
-        for package in ("librosa", "onnxruntime", "torch")
+        for package in ("onnxruntime", "torch")
     )
 
 
@@ -94,31 +101,22 @@ def separate_with_polarformer(
     instrumental_path: Path,
     vocals_path: Path,
     progress: ProgressCallback | None = None,
+    ffmpeg: str = "ffmpeg",
 ) -> None:
     if not polarformer_dependencies_available():
-        raise MediaError("Thiếu onnxruntime, torch hoặc librosa cho BS PolarFormer.")
+        raise MediaError("Thiếu onnxruntime hoặc torch cho BS PolarFormer.")
     if not _model_is_valid(model_path):
         raise MediaError("Checkpoint BS PolarFormer FP32 chưa hợp lệ.")
 
-    import librosa
     import onnxruntime as ort
     import torch
 
-    audio, _original_rate = librosa.load(str(mix), sr=SAMPLE_RATE, mono=False)
-    audio = np.asarray(audio, dtype=np.float32)
-    if audio.ndim == 1:
-        audio = np.stack((audio, audio))
-    elif audio.shape[0] > 2:
-        audio = audio[:2]
-    if audio.shape[0] != 2 or audio.shape[1] == 0:
-        raise MediaError("BS PolarFormer cần audio stereo có dữ liệu.")
-
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-    total_samples = audio.shape[1]
-    step = CHUNK_SIZE // NUM_OVERLAP
-    starts = list(range(0, total_samples, step))
-    vocals = np.zeros((2, total_samples), dtype=np.float32)
-    weights = np.zeros(total_samples, dtype=np.float32)
+    chunk_seconds = _stream_chunk_seconds()
+    chunk_size = chunk_seconds * SAMPLE_RATE
+    overlap_size = min(STREAM_OVERLAP_SECONDS * SAMPLE_RATE, chunk_size // 2)
+    step = chunk_size - overlap_size
+    session = _create_session(ort, model_path)
+    _configure_torch(torch)
     stft_window = torch.hann_window(WIN_LENGTH)
     stft_options = {
         "n_fft": N_FFT,
@@ -127,62 +125,266 @@ def separate_with_polarformer(
         "normalized": False,
     }
 
-    for index, start in enumerate(starts):
-        end = min(start + CHUNK_SIZE, total_samples)
-        chunk = audio[:, start:end]
-        if chunk.shape[1] < CHUNK_SIZE:
-            chunk = np.pad(chunk, ((0, 0), (0, CHUNK_SIZE - chunk.shape[1])))
-        estimate = _infer_chunk(session, torch, chunk, stft_window, stft_options)
-        actual_length = end - start
-        vocals[:, start:end] += estimate[:, :actual_length]
-        weights[start:end] += 1.0
-        if progress:
-            progress(
-                (index + 1) / len(starts),
-                f"BS PolarFormer FP32: {index + 1}/{len(starts)} đoạn",
-            )
-
-    vocals /= np.maximum(weights, 1.0)[None, :]
-    instrumental = audio - vocals
     instrumental_path.parent.mkdir(parents=True, exist_ok=True)
     vocals_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(instrumental_path, instrumental.T, SAMPLE_RATE, subtype="FLOAT")
-    sf.write(vocals_path, vocals.T, SAMPLE_RATE, subtype="FLOAT")
+    normalized_mix = instrumental_path.parent / ".polarformer-input-44100.wav"
+    instrumental_partial = instrumental_path.parent / ".instrumental.polarformer.part.wav"
+    vocals_partial = vocals_path.parent / ".vocals.polarformer.part.wav"
+    created_normalized_mix = False
+    try:
+        source = _prepare_stream_source(mix, normalized_mix, ffmpeg)
+        created_normalized_mix = source == normalized_mix
+        _stream_separate(
+            source,
+            instrumental_partial,
+            vocals_partial,
+            session,
+            torch,
+            stft_window,
+            stft_options,
+            chunk_size,
+            overlap_size,
+            step,
+            progress,
+        )
+        os.replace(instrumental_partial, instrumental_path)
+        os.replace(vocals_partial, vocals_path)
+    finally:
+        instrumental_partial.unlink(missing_ok=True)
+        vocals_partial.unlink(missing_ok=True)
+        if created_normalized_mix or normalized_mix.exists():
+            normalized_mix.unlink(missing_ok=True)
 
 
-def _infer_chunk(session: object, torch: object, audio: np.ndarray, window: object, options: dict) -> np.ndarray:
-    audio_tensor = torch.from_numpy(audio).float()
-    stft = torch.stft(audio_tensor, **options, window=window, return_complex=True)
-    stft_real = torch.view_as_real(stft)
-    channels, frequencies, frames, complex_parts = stft_real.shape
-    packed = (
-        stft_real.permute(1, 0, 2, 3)
-        .reshape(1, frequencies * channels, frames, complex_parts)
-        .contiguous()
+def _create_session(ort: object, model_path: Path) -> object:
+    options = ort.SessionOptions()
+    # ONNX Runtime's default arena retains multi-gigabyte intermediates after
+    # every window. Disabling it trades a little speed for predictable RSS.
+    options.enable_cpu_mem_arena = False
+    options.enable_mem_pattern = False
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.intra_op_num_threads = ORT_THREADS
+    options.inter_op_num_threads = 1
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return ort.InferenceSession(
+        str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
     )
-    features = (
-        packed.permute(0, 2, 1, 3)
-        .reshape(1, frames, frequencies * channels * complex_parts)
-        .numpy()
+
+
+def _configure_torch(torch: object) -> None:
+    torch.set_num_threads(ORT_THREADS)
+    with suppress(RuntimeError):
+        torch.set_num_interop_threads(1)
+
+
+def _stream_chunk_seconds() -> int:
+    raw = os.environ.get("KARAOKE_POLARFORMER_CHUNK_SECONDS", str(STREAM_CHUNK_SECONDS))
+    try:
+        requested = int(raw)
+    except ValueError:
+        requested = STREAM_CHUNK_SECONDS
+    return max(2, min(STREAM_MAX_CHUNK_SECONDS, requested))
+
+
+def _prepare_stream_source(mix: Path, normalized_mix: Path, ffmpeg: str) -> Path:
+    info = sf.info(mix)
+    if info.samplerate == SAMPLE_RATE and info.channels == 2 and info.frames > 0:
+        return mix
+    run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(mix),
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-c:a",
+            "pcm_f32le",
+            str(normalized_mix),
+        ]
     )
-    mask = session.run(None, {"stft_features": features})[0]
-    packed_complex = torch.view_as_complex(packed.unsqueeze(1).contiguous())
-    mask_complex = torch.view_as_complex(torch.from_numpy(mask).contiguous())
-    masked = packed_complex * mask_complex
-    masked = (
-        masked.reshape(1, 1, frequencies, channels, frames)
-        .permute(0, 1, 3, 2, 4)
-        .reshape(channels, frequencies, frames)
-    )
-    masked[:, 0, :] = 0.0
-    reconstructed = torch.istft(
-        masked,
-        **options,
-        window=window,
-        return_complex=False,
-        length=audio.shape[1],
-    )
-    return reconstructed.numpy().astype(np.float32, copy=False)
+    info = sf.info(normalized_mix)
+    if info.samplerate != SAMPLE_RATE or info.channels != 2 or info.frames <= 0:
+        raise MediaError("Không chuẩn hóa được audio stereo 44,1 kHz cho PolarFormer.")
+    return normalized_mix
+
+
+def _stream_separate(
+    source_path: Path,
+    instrumental_partial: Path,
+    vocals_partial: Path,
+    session: object,
+    torch: object,
+    stft_window: object,
+    stft_options: dict,
+    chunk_size: int,
+    overlap_size: int,
+    step: int,
+    progress: ProgressCallback | None,
+) -> None:
+    with sf.SoundFile(source_path) as source:
+        total_samples = len(source)
+        if source.channels != 2 or source.samplerate != SAMPLE_RATE or total_samples <= 0:
+            raise MediaError("BS PolarFormer cần audio stereo 44,1 kHz có dữ liệu.")
+        starts = list(range(0, total_samples, step))
+        vocal_accumulator = np.zeros((2, 0), dtype=np.float32)
+        weight_accumulator = np.zeros(0, dtype=np.float32)
+        buffer_start = 0
+
+        with sf.SoundFile(
+            instrumental_partial,
+            mode="w",
+            samplerate=SAMPLE_RATE,
+            channels=2,
+            subtype="FLOAT",
+            format="WAV",
+        ) as instrumental_output, sf.SoundFile(
+            vocals_partial,
+            mode="w",
+            samplerate=SAMPLE_RATE,
+            channels=2,
+            subtype="FLOAT",
+            format="WAV",
+        ) as vocals_output:
+            for index, start in enumerate(starts):
+                flush_count = min(max(0, start - buffer_start), weight_accumulator.size)
+                if flush_count:
+                    _flush_accumulator(
+                        source,
+                        instrumental_output,
+                        vocals_output,
+                        buffer_start,
+                        vocal_accumulator[:, :flush_count],
+                        weight_accumulator[:flush_count],
+                    )
+                    vocal_accumulator = vocal_accumulator[:, flush_count:]
+                    weight_accumulator = weight_accumulator[flush_count:]
+                    buffer_start += flush_count
+
+                source.seek(start)
+                raw = source.read(chunk_size, dtype="float32", always_2d=True)
+                actual_length = raw.shape[0]
+                if actual_length <= 0:
+                    continue
+                chunk = raw.T
+                if actual_length < chunk_size:
+                    chunk = np.pad(chunk, ((0, 0), (0, chunk_size - actual_length)))
+                estimate = _infer_chunk(session, torch, chunk, stft_window, stft_options)
+                estimate = estimate[:, :actual_length]
+                weights = _chunk_weights(
+                    actual_length,
+                    overlap_size,
+                    first=index == 0,
+                    last=index == len(starts) - 1,
+                )
+                required = start - buffer_start + actual_length
+                if required > weight_accumulator.size:
+                    extension = required - weight_accumulator.size
+                    vocal_accumulator = np.pad(vocal_accumulator, ((0, 0), (0, extension)))
+                    weight_accumulator = np.pad(weight_accumulator, (0, extension))
+                offset = start - buffer_start
+                vocal_accumulator[:, offset : offset + actual_length] += estimate * weights
+                weight_accumulator[offset : offset + actual_length] += weights
+                if progress:
+                    progress(
+                        (index + 1) / len(starts),
+                        f"BS PolarFormer FP32 low-memory: {index + 1}/{len(starts)} đoạn",
+                    )
+                del raw, chunk, estimate, weights
+                if index % 4 == 3:
+                    gc.collect()
+
+            if weight_accumulator.size:
+                _flush_accumulator(
+                    source,
+                    instrumental_output,
+                    vocals_output,
+                    buffer_start,
+                    vocal_accumulator,
+                    weight_accumulator,
+                )
+
+
+def _chunk_weights(length: int, overlap: int, *, first: bool, last: bool) -> np.ndarray:
+    weights = np.ones(length, dtype=np.float32)
+    fade_length = min(overlap, length)
+    if fade_length <= 0:
+        return weights
+    phase = (np.arange(fade_length, dtype=np.float32) + 0.5) / overlap
+    if not first:
+        weights[:fade_length] *= np.sin(phase * np.pi / 2.0) ** 2
+    if not last:
+        weights[-fade_length:] *= np.cos(phase * np.pi / 2.0) ** 2
+    return weights
+
+
+def _flush_accumulator(
+    source: sf.SoundFile,
+    instrumental_output: sf.SoundFile,
+    vocals_output: sf.SoundFile,
+    start: int,
+    vocal_accumulator: np.ndarray,
+    weight_accumulator: np.ndarray,
+) -> None:
+    count = weight_accumulator.size
+    source.seek(start)
+    original = source.read(count, dtype="float32", always_2d=True)
+    vocals = vocal_accumulator[:, : original.shape[0]] / np.maximum(
+        weight_accumulator[: original.shape[0]], np.finfo(np.float32).eps
+    )[None, :]
+    instrumental = original.T - vocals
+    instrumental_output.write(instrumental.T)
+    vocals_output.write(vocals.T)
+
+
+def _infer_chunk(
+    session: object,
+    torch: object,
+    audio: np.ndarray,
+    window: object,
+    options: dict,
+) -> np.ndarray:
+    with torch.inference_mode():
+        audio_tensor = torch.from_numpy(audio).float()
+        stft = torch.stft(audio_tensor, **options, window=window, return_complex=True)
+        stft_real = torch.view_as_real(stft)
+        channels, frequencies, frames, complex_parts = stft_real.shape
+        packed = (
+            stft_real.permute(1, 0, 2, 3)
+            .reshape(1, frequencies * channels, frames, complex_parts)
+            .contiguous()
+        )
+        features = (
+            packed.permute(0, 2, 1, 3)
+            .reshape(1, frames, frequencies * channels * complex_parts)
+            .numpy()
+        )
+        mask = session.run(None, {"stft_features": features})[0]
+        packed_complex = torch.view_as_complex(packed.unsqueeze(1).contiguous())
+        mask_complex = torch.view_as_complex(torch.from_numpy(mask).contiguous())
+        masked = packed_complex * mask_complex
+        masked = (
+            masked.reshape(1, 1, frequencies, channels, frames)
+            .permute(0, 1, 3, 2, 4)
+            .reshape(channels, frequencies, frames)
+        )
+        masked[:, 0, :] = 0.0
+        reconstructed = torch.istft(
+            masked,
+            **options,
+            window=window,
+            return_complex=False,
+            length=audio.shape[1],
+        )
+        return reconstructed.numpy().astype(np.float32, copy=False)
 
 
 def _model_is_valid(path: Path) -> bool:

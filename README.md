@@ -8,7 +8,7 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 
 ## Tiếng Việt
 
-### Chức năng đã có trong v0.1.1
+### Chức năng đã có trong v0.1.2
 
 - Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
 - Batch Studio nhận tối đa 12 video và 12 timeline trong một lượt, tự ghép theo tên file tiếng Việt (hoặc theo thứ tự chọn khi số lượng khớp), tự điền tên bài từ tên video và cho sửa riêng tên bài/ca sĩ trước khi chạy. Hai bài được xử lý song song; phần còn lại tự xếp hàng để giữ máy ổn định, đồng thời từng hàng hiển thị tiến độ và cho mở project ngay khi hoàn tất.
@@ -102,7 +102,7 @@ uv sync --extra quality --extra alignment
 
 Bộ Maximum Accuracy dùng [`nguyenvulebinh/lyric-alignment`](https://huggingface.co/nguyenvulebinh/lyric-alignment) chuyên cho lời hát làm model chính và [`nguyenvulebinh/wav2vec2-base-vietnamese-250h`](https://huggingface.co/nguyenvulebinh/wav2vec2-base-vietnamese-250h) làm model kiểm chứng. Model chỉ được tải sau khi người dùng chấp nhận giấy phép một lần cho project; revision được pin, snapshot được SHA-256 và weight nằm trong thư mục dữ liệu local của app (`.karaoke-studio-data/models/` trên macOS/Linux hoặc `%LOCALAPPDATA%\KaraokeStudio\models\` trên Windows), không nằm trong Git. Cả hai model đều CC BY-NC 4.0, không dùng cho mục đích thương mại.
 
-Stem Final mặc định dùng [`bgkb/bs_polarformer`](https://huggingface.co/bgkb/bs_polarformer) ở revision `9158719e…`, file FP32 ONNX 210.652.828 byte và SHA-256 `1c6857c3…525c50`. App tải có thể tiếp tục file này vào thư mục model local trong lần phân tích đầu tiên, kiểm tra đủ kích thước + SHA-256 rồi mới cho ONNX Runtime chạy. Model và bản chuyển đổi dùng giấy phép MIT; checkpoint không được đóng gói lại trong GitHub Release. ViperX 1297 vẫn được giữ làm fallback tự động nếu download hoặc inference PolarFormer thất bại.
+Stem Final mặc định dùng [`bgkb/bs_polarformer`](https://huggingface.co/bgkb/bs_polarformer) ở revision `9158719e…`, file FP32 ONNX 210.652.828 byte và SHA-256 `1c6857c3…525c50`. App tải có thể tiếp tục file này vào thư mục model local trong lần phân tích đầu tiên, kiểm tra đủ kích thước + SHA-256 rồi mới cho ONNX Runtime chạy. Inference dùng luồng giới hạn bộ nhớ dành cho máy 24 GB: cửa sổ FP32 bốn giây, overlap equal-power một giây, ghi WAV tăng dần và tắt memory arena của ONNX. Benchmark audio thật 12 giây và 30 giây đều giữ peak khoảng 3,24 GiB thay vì hơn 10 GiB với cửa sổ 20 giây; RAM không tăng theo độ dài bài. Model và bản chuyển đổi dùng giấy phép MIT; checkpoint không được đóng gói lại trong GitHub Release. ViperX 1297 vẫn được giữ làm fallback tự động nếu download hoặc inference PolarFormer thất bại.
 
 `alignment_profile` có ba mức: `maximum` (mặc định, 2 model × 2 stem), `balanced` (model lời hát × 2 stem) và `fast` (model lời hát × 1 stem). `motion_profile` mặc định là `vocal_hybrid`; hai chế độ nội bộ còn lại là `vocal_only` và `linear`. Automatic Sweep Critic dùng lại bằng chứng CTC và hai vocal stem, không tải thêm model. Nếu thiếu model hoặc stem, job vẫn hoàn thành nhưng `alignment-evidence.json` ghi degraded state và vùng liên quan không thể tự đạt Verified.
 

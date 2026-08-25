@@ -4,6 +4,7 @@ import os
 import stat
 import struct
 import tempfile
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -12,6 +13,8 @@ FULL_FRAME_RATE_PLAYBACK_INTENT_KEY = (
 )
 QUICKTIME_UINT8_DATA_TYPE = 22
 _CONTAINER_ATOMS = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts", b"dinf"}
+_PLAYBACK_INTENT_LOCKS: dict[str, threading.Lock] = {}
+_PLAYBACK_INTENT_LOCKS_GUARD = threading.Lock()
 
 
 class QuickTimeMetadataError(RuntimeError):
@@ -144,6 +147,14 @@ def _copy_range(source, destination, byte_count: int) -> None:
 
 def inject_full_frame_rate_playback_intent(path: Path) -> None:
     """Atomically add Apple's typed real-time HFR intent to an MP4/MOV file."""
+    lock_key = os.path.normcase(str(path.resolve()))
+    with _PLAYBACK_INTENT_LOCKS_GUARD:
+        path_lock = _PLAYBACK_INTENT_LOCKS.setdefault(lock_key, threading.Lock())
+    with path_lock:
+        _inject_full_frame_rate_playback_intent(path)
+
+
+def _inject_full_frame_rate_playback_intent(path: Path) -> None:
     top_level = _top_level_atoms(path)
     try:
         moov_position, moov_size, moov_header_size, _ = next(

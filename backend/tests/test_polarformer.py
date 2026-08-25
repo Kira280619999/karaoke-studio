@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import soundfile as sf
@@ -37,6 +39,16 @@ def test_streaming_separation_is_constant_length_and_preserves_mix(
 
     monkeypatch.setattr(polarformer, "polarformer_dependencies_available", lambda: True)
     monkeypatch.setattr(polarformer, "_model_is_valid", lambda _path: True)
+    # The regular cross-platform CI environment intentionally omits the optional
+    # AI runtime. Keep this unit test lightweight while still exercising the
+    # complete streaming/overlap/write path; the optional-runtime CI job covers
+    # the real imports separately.
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(hann_window=lambda _length: object()),
+    )
     monkeypatch.setattr(polarformer, "_create_session", lambda _ort, _path: object())
     monkeypatch.setattr(polarformer, "_configure_torch", lambda _torch: None)
     monkeypatch.setattr(

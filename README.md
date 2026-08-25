@@ -8,7 +8,7 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 
 ## Tiếng Việt
 
-### Chức năng đã có trong v0.1.2
+### Chức năng đã có trong v0.1.3
 
 - Import MP4/MOV/MKV/WEBM cùng LRC thường/enhanced, SRT, WebVTT hoặc TXT timestamp; cũng có thể dán trực tiếp nội dung timestamp mà không cần tạo file.
 - Batch Studio nhận tối đa 12 video và 12 timeline trong một lượt, tự ghép theo tên file tiếng Việt (hoặc theo thứ tự chọn khi số lượng khớp), tự điền tên bài từ tên video và cho sửa riêng tên bài/ca sĩ trước khi chạy. Hai bài được xử lý song song; phần còn lại tự xếp hàng để giữ máy ổn định, đồng thời từng hàng hiển thị tiến độ và cho mở project ngay khi hoàn tất.

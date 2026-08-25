@@ -674,9 +674,10 @@ def render_video(
     compatibility_contract = (
         "-hfr-realtime-v1" if preset == RenderPreset(1920, 1080, 120, 1) else ""
     )
+    output_suffix = ".mov" if mode == "final" else ".mp4"
     output = export_dir / (
         f"{_slug(project.title)}-karaoke-{export_kind}-"
-        f"r{timeline.revision:05d}{compatibility_contract}-{preset_name}.mp4"
+        f"r{timeline.revision:05d}{compatibility_contract}-{preset_name}{output_suffix}"
     )
     log_path = project_dir / "logs" / f"render-{mode}-{preset_name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -707,6 +708,11 @@ def render_video(
         f"enable='lt(t,{SONG_CREDIT_DURATION_SECONDS:.1f})'[credited];"
         f"[{overlay_input_index}:v]fps={preset.ffmpeg_fps},format=rgba[ov];"
         f"[credited][ov]overlay=0:{overlay_y}:shortest=1:format=auto[v]"
+    )
+    audio_encoding_args = (
+        ["-c:a", "pcm_s24le", "-ar", "48000"]
+        if mode == "final"
+        else ["-c:a", "aac", "-b:a", "320k", "-ar", "48000"]
     )
     command = [
         settings.ffmpeg,
@@ -741,17 +747,10 @@ def render_video(
         "[v]",
         "-map",
         f"{audio_input_index}:a:0",
-        "-af",
-        "alimiter=limit=0.8913:level=false:latency=true",
         "-t",
         f"{timeline.duration_us / 1_000_000:.6f}",
         *_video_encoding_args(preset),
-        "-c:a",
-        "aac",
-        "-b:a",
-        "320k",
-        "-ar",
-        "48000",
+        *audio_encoding_args,
         "-movflags",
         "+faststart",
         str(output),
@@ -784,6 +783,42 @@ def render_video(
     if preset == RenderPreset(1920, 1080, 120, 1):
         inject_full_frame_rate_playback_intent(output)
     event(0.86, "Render hoàn tất; đang chạy full decode và QA…")
+    return output
+
+
+def make_mp4_share_copy(master: Path, settings: Settings) -> Path:
+    """Create the convenient AAC copy without re-encoding the verified video stream."""
+    if master.suffix.casefold() != ".mov":
+        raise ValueError("Share copy phải được tạo từ MOV master.")
+    output = master.with_name(f"{master.stem}-share.mp4")
+    run_command = [
+        settings.ffmpeg,
+        "-hide_banner",
+        "-y",
+        "-i",
+        str(master),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "320k",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    from .media import run
+    from .quicktime import read_full_frame_rate_playback_intent
+
+    run(run_command)
+    if read_full_frame_rate_playback_intent(master) == 1:
+        inject_full_frame_rate_playback_intent(output)
     return output
 
 

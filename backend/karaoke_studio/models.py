@@ -107,6 +107,7 @@ class ProjectRecord(BaseModel):
     fps: str
     has_audio: bool
     selected_instrumental: str | None = None
+    selected_instrumental_sha256: str | None = None
     instrumental_confirmed: bool = False
     error: str | None = None
 
@@ -114,7 +115,7 @@ class ProjectRecord(BaseModel):
 class JobRecord(BaseModel):
     id: str
     project_id: str
-    kind: Literal["process", "render"]
+    kind: Literal["process", "final_audio", "render"]
     state: JobState
     progress: float = Field(ge=0, le=1)
     message: str
@@ -136,6 +137,10 @@ class RenderRequest(BaseModel):
     countdown: bool = True
     expected_timeline_revision: int | None = Field(default=None, ge=1)
     expected_instrumental_id: str | None = None
+    expected_instrumental_sha256: str | None = None
+    deliveries: list[Literal["mov_pcm24", "mp4_aac320"]] = Field(
+        default_factory=lambda: ["mov_pcm24", "mp4_aac320"]
+    )
 
 
 class ProcessRequest(BaseModel):

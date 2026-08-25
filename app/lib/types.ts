@@ -25,6 +25,7 @@ export interface Project {
   fps: string;
   has_audio: boolean;
   selected_instrumental: string | null;
+  selected_instrumental_sha256: string | null;
   instrumental_confirmed: boolean;
   error: string | null;
 }
@@ -160,7 +161,7 @@ export interface Artifact {
 export interface Job {
   id: string;
   project_id: string;
-  kind: 'process' | 'render';
+  kind: 'process' | 'final_audio' | 'render';
   state: 'PENDING' | 'RUNNING' | 'COMPLETE' | 'FAILED' | 'CANCELLED';
   progress: number;
   message: string;
@@ -171,6 +172,19 @@ export interface CandidateWaveform {
   label: string;
   production_grade: boolean;
   warning: string | null;
+  quality_profile?: 'analysis' | 'full' | 'balanced' | 'clean' | 'fallback';
+  analysis_eligible?: boolean;
+  export_eligible?: boolean;
+  pcm_sha256?: string | null;
+  signal_path?: string;
+  audio_qa?: {
+    sample_rate: number;
+    channels: number;
+    frames: number;
+    peak: number;
+    gain_db: number;
+    status: 'PASS' | 'FAIL';
+  } | null;
   instrumental: number[];
   vocals: number[];
 }

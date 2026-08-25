@@ -56,11 +56,19 @@ class Store:
                     fps TEXT NOT NULL,
                     has_audio INTEGER NOT NULL,
                     selected_instrumental TEXT,
+                    selected_instrumental_sha256 TEXT,
                     instrumental_confirmed INTEGER NOT NULL DEFAULT 0,
                     error TEXT
                 )
                 """
             )
+            project_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(projects)")
+            }
+            if "selected_instrumental_sha256" not in project_columns:
+                connection.execute(
+                    "ALTER TABLE projects ADD COLUMN selected_instrumental_sha256 TEXT"
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -143,11 +151,13 @@ class Store:
                 INSERT INTO projects (
                     id, title, artist, state, created_at, updated_at, source_name, lrc_name,
                     background_name, background_mode, source_sha256, duration_us, width, height,
-                    fps, has_audio, selected_instrumental, instrumental_confirmed, error
+                    fps, has_audio, selected_instrumental, selected_instrumental_sha256,
+                    instrumental_confirmed, error
                 ) VALUES (
                     :id, :title, :artist, :state, :created_at, :updated_at, :source_name, :lrc_name,
                     :background_name, :background_mode, :source_sha256, :duration_us, :width, :height,
-                    :fps, :has_audio, :selected_instrumental, :instrumental_confirmed, :error
+                    :fps, :has_audio, :selected_instrumental, :selected_instrumental_sha256,
+                    :instrumental_confirmed, :error
                 )
                 """,
                 values,
@@ -172,6 +182,7 @@ class Store:
             "state",
             "duration_us",
             "selected_instrumental",
+            "selected_instrumental_sha256",
             "instrumental_confirmed",
             "error",
         }

@@ -953,7 +953,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewerVolume, setViewerVolume] = useState(1);
   const [previewAudioMode, setPreviewAudioMode] = useState<PreviewAudioMode>(() => (
-    preferredPreviewAudioMode(data.project.selected_instrumental, data.artifacts)
+    preferredPreviewAudioMode()
   ));
   const [preset, setPreset] = useState<ExportPreset>(DEFAULT_EXPORT_PRESET);
   const [inspectorTab, setInspectorTab] = useState<'review' | 'audio' | 'text' | 'export'>('review');
@@ -982,6 +982,9 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
     ? data.waveform?.candidates[data.project.selected_instrumental]?.label
       ?? data.project.selected_instrumental
     : 'Chưa có instrumental';
+  const finalCandidatesReady = ['final_full', 'final_balanced', 'final_clean'].every(
+    (candidateId) => Boolean(data.waveform?.candidates[candidateId]),
+  );
   const previewWaveform = previewWaveformFor(
     usingInstrumentalPreview ? 'instrumental' : 'original',
     data.project.selected_instrumental,
@@ -1427,6 +1430,10 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
           countdown: true,
           expected_timeline_revision: expectedTimelineRevision,
           expected_instrumental_id: mode === 'final' ? data.project.selected_instrumental : null,
+          expected_instrumental_sha256: mode === 'final'
+            ? data.project.selected_instrumental_sha256
+            : null,
+          deliveries: mode === 'final' ? ['mov_pcm24', 'mp4_aac320'] : [],
         }),
       });
       watchJob(response.job);
@@ -1721,7 +1728,7 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
                 </div>
               </section>
             )}
-            {inspectorTab === 'audio' && <CandidateReview project={data.project} waveform={data.waveform} artifacts={data.artifacts} onReload={onReload} onError={onError} onSelected={() => setPreviewAudioMode('instrumental')} />}
+            {inspectorTab === 'audio' && <CandidateReview project={data.project} waveform={data.waveform} artifacts={data.artifacts} currentTimeUs={currentTimeUs} busy={Boolean(rendering)} watchJob={watchJob} onReload={onReload} onError={onError} />}
             {inspectorTab === 'text' && (
               <section className="text-inspector">
                 <div><span className="section-kicker">TEXT INSPECTOR</span><h2>Hai dòng Karaoke cố định</h2><p>Font được áp dụng đồng nhất cho Preview và video xuất. Mọi thay đổi đều tự lưu vào TimelineV1.</p></div>
@@ -1738,11 +1745,11 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
             )}
             {inspectorTab === 'export' && (
               <section className="export-panel">
-                <div><span className="section-kicker">SHARE / XUẤT VIDEO</span><h2>Xuất đúng âm thanh đã nghe</h2><p>Điểm timing chỉ là cảnh báo. Draft mix gốc luôn khả dụng; Final loại giọng cần xác nhận đúng instrumental để không xuất nhầm.</p></div>
+                <div><span className="section-kicker">SHARE / XUẤT VIDEO</span><h2>MOV PCM24 + MP4 chia sẻ</h2><p>Final dùng đúng PCM đã nghe và khóa SHA-256. MOV giữ audio 24-bit không nén; MP4 dùng chung video và chỉ mã hóa audio AAC 320k.</p></div>
                 <label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as ExportPreset)}>{EXPORT_PRESET_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
                 {preset === '1080p120' && <p className="export-preset-warning">120fps CFR thật · phát 1× trong QuickTime · clock từng frame rõ ràng. Thiết bị vẫn cần hỗ trợ giải mã H.264 1080p120.</p>}
-                <div className={`export-audio-summary ${data.project.instrumental_confirmed ? 'confirmed' : 'needs-confirmation'}`}><span>Âm thanh Karaoke</span><strong>{selectedInstrumentalName}</strong><small>{data.project.instrumental_confirmed ? '✓ Đã nghe và xác nhận · Final dùng đúng stem này' : 'Cần nghe và xác nhận trước khi xuất Final'}</small>{!data.project.instrumental_confirmed && <button type="button" onClick={() => setInspectorTab('audio')}>Mở Audio để xác nhận</button>}</div>
-                <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ · mix gốc</button><button className="final-button" title={!data.project.selected_instrumental ? 'Chưa có instrumental để loại giọng' : !data.project.instrumental_confirmed ? 'Hãy nghe và xác nhận instrumental trong tab Audio' : `Final sẽ dùng ${selectedInstrumentalName}`} disabled={!data.project.selected_instrumental || !data.project.instrumental_confirmed || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Final đã loại giọng' : 'Xuất Karaoke loại giọng'}</button></div>
+                <div className={`export-audio-summary ${data.project.instrumental_confirmed ? 'confirmed' : 'needs-confirmation'}`}><span>Âm thanh Karaoke</span><strong>{selectedInstrumentalName}</strong><small>{data.project.instrumental_confirmed && data.project.selected_instrumental_sha256 ? `✓ PCM đã khóa · ${data.project.selected_instrumental_sha256.slice(0, 12)}` : 'Cần nghe và xác nhận trước khi xuất Final'}</small>{(!data.project.instrumental_confirmed || !finalCandidatesReady) && <button type="button" onClick={() => setInspectorTab('audio')}>{finalCandidatesReady ? 'Mở Audio để xác nhận' : 'Chuẩn bị Audio Final cực đại'}</button>}</div>
+                <div className="export-actions"><button disabled={Boolean(rendering) || dirty || saving} type="button" onClick={() => render('draft')}>Xuất bản có ca sĩ · mix gốc</button><button className="final-button" title={!data.project.selected_instrumental ? 'Chưa có instrumental để loại giọng' : !data.project.instrumental_confirmed ? 'Hãy nghe và xác nhận instrumental trong tab Audio' : `Final sẽ dùng ${selectedInstrumentalName}`} disabled={!data.project.selected_instrumental || !data.project.instrumental_confirmed || !data.project.selected_instrumental_sha256 || Boolean(rendering) || dirty || saving} type="button" onClick={() => render('final')}>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'Xuất lại MOV + MP4' : 'Xuất Final MOV + MP4'}</button></div>
                 <button className="verification-gate" disabled={dirty || saving || data.project.state === 'VERIFIED' || data.project.state === 'RENDERED'} type="button" onClick={markVerified}><span>{data.project.instrumental_confirmed ? '✓' : '○'} Instrumental</span><span>{lowConfidence === 0 ? '✓' : '○'} {lowConfidence ? `${lowConfidence} điểm nên kiểm tra` : 'Timing AI đã đạt'}</span><strong>{data.project.state === 'VERIFIED' || data.project.state === 'RENDERED' ? 'ĐÃ VERIFIED' : 'Timeline Verified là tùy chọn · Final chỉ khóa khi stem chưa xác nhận'}</strong></button>
                 <ExportList
                   projectId={data.project.id}
@@ -1763,12 +1770,22 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
   );
 }
 
-function CandidateReview({ project, waveform, artifacts, onReload, onError, onSelected }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; onReload: () => Promise<void>; onError: (message: string | null) => void; onSelected: (candidateId: string) => void }) {
+function CandidateReview({ project, waveform, artifacts, currentTimeUs, busy, watchJob, onReload, onError }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; currentTimeUs: number; busy: boolean; watchJob: (job: Job) => void; onReload: () => Promise<void>; onError: (message: string | null) => void }) {
+  const profiles = ['final_full', 'final_balanced', 'final_clean'];
+  const finalReady = profiles.every((candidateId) => Boolean(waveform?.candidates[candidateId]));
+  const prepare = async () => {
+    try {
+      onError(null);
+      const response = await api<{ job: Job }>(`/api/projects/${project.id}/final-audio-candidates`, { method: 'POST', body: '{}' });
+      watchJob(response.job);
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Không chuẩn bị được Audio Final.');
+    }
+  };
   const select = async (candidateId: string) => {
     try {
       await api<Project>(`/api/projects/${project.id}/instrumental`, { method: 'POST', body: JSON.stringify({ candidate_id: candidateId, confirmed: true }) });
       await onReload();
-      onSelected(candidateId);
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Không xác nhận được instrumental.');
     }
@@ -1776,20 +1793,29 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError, onSe
 
   return (
     <section className="candidate-panel">
-      <div><span className="section-kicker">AUDIO A/B</span><h2>Chọn âm thanh Final</h2><p>Viewer mặc định nghe đúng candidate đang chọn. Hãy nghe cùng lời chạy rồi xác nhận; bạn vẫn có thể chuyển sang GỐC để đối chiếu.</p></div>
+      <div><span className="section-kicker">AUDIO FINAL · A/B</span><h2>Chọn theo tai, không tự đoán</h2><p>Viewer luôn bắt đầu bằng GỐC. Candidate phát từ đúng vị trí Viewer hiện tại; việc tạo Audio Final không chạy lại hay sửa timing.</p></div>
+      <button className="prepare-final-audio" disabled={busy} type="button" onClick={prepare}>{busy ? 'Pipeline đang chạy…' : finalReady ? '↻ Tạo lại 3 candidate cực đại' : 'Chuẩn bị Audio Final cực đại'}</button>
       <div className="candidate-list">
-        {Object.entries(waveform?.candidates ?? {}).map(([candidateId, candidate]) => {
+        {Object.entries(waveform?.candidates ?? {}).sort(([left], [right]) => {
+          const leftIndex = profiles.indexOf(left);
+          const rightIndex = profiles.indexOf(right);
+          return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex);
+        }).map(([candidateId, candidate]) => {
           const artifact = selectedInstrumentalArtifact(candidateId, artifacts);
           const selected = project.selected_instrumental === candidateId;
+          const profileLabel = candidate.quality_profile === 'full' ? 'ĐẦY NHẠC' : candidate.quality_profile === 'balanced' ? 'CÂN BẰNG' : candidate.quality_profile === 'clean' ? 'SẠCH GIỌNG' : 'SO SÁNH';
           return (
             <article className={`candidate-card ${selected ? 'selected' : ''}`} key={candidateId}>
-              <div><span>{candidate.production_grade ? 'AI' : 'FB'}</span><strong>{candidate.label}</strong><small>{candidate.production_grade ? 'Production candidate' : 'Fallback cần kiểm tra kỹ'}</small></div>
+              <div><span>{candidate.production_grade ? 'AI' : 'FB'}</span><strong>{candidate.label}</strong><small>{profileLabel}{candidate.audio_qa?.status === 'PASS' ? ' · PCM QA ✓' : ''}</small></div>
               {artifact && <audio controls preload="none" src={assetUrl(artifact.url)} onPlay={(event) => {
                 document.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
                   if (media !== event.currentTarget) media.pause();
                 });
+                event.currentTarget.currentTime = Math.min(event.currentTarget.duration || Number.POSITIVE_INFINITY, currentTimeUs / 1_000_000);
               }} />}
               {candidate.warning && <p>{candidate.warning}</p>}
+              {candidate.signal_path && <p className="candidate-signal-path">{candidate.signal_path}</p>}
+              {candidate.pcm_sha256 && <small className="candidate-hash">PCM {candidate.pcm_sha256.slice(0, 12)}</small>}
               <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Đã xác nhận ✓' : selected ? 'Xác nhận dùng bản này' : 'Chọn và xác nhận'}</button>
             </article>
           );
@@ -3248,10 +3274,11 @@ function ExportList({
       {exports.map((artifact) => {
         const confirming = deleteCandidateId === artifact.id;
         const deleting = deletingId === artifact.id;
+        const container = artifact.label.toLowerCase().endsWith('.mov') ? 'MOV' : 'MP4';
         return (
           <article className={`export-item ${confirming ? 'is-confirming' : ''}`} key={artifact.id}>
             <div className="export-item-head">
-              <span>MP4</span>
+              <span>{container}</span>
               <div><strong>{artifact.label}</strong><small>{formatBytes(artifact.bytes)}</small></div>
             </div>
             {confirming ? (

@@ -11,6 +11,22 @@ The separately downloaded model weights at
 [`nguyenvulebinh/lyric-alignment`](https://huggingface.co/nguyenvulebinh/lyric-alignment)
 are licensed CC BY-NC 4.0 and are not distributed with Karaoke Studio.
 
+## Audio Separator and community separation checkpoints
+
+Karaoke Studio can invoke
+[`python-audio-separator`](https://github.com/nomadkaraoke/python-audio-separator)
+as an optional local adapter. The package and its own notices are installed by
+the local Python environment; Karaoke Studio does not redistribute the package
+source in this repository.
+
+The RoFormer checkpoints used by the optional Full, Balanced and Clean Final
+Audio profiles are downloaded on demand into the local application data
+directory. They are not committed to or redistributed with Karaoke Studio.
+Their upstream model/config filenames and SHA-256 hashes are written into each
+project manifest. Community checkpoint terms can differ from the Audio
+Separator package license; the operator must verify the applicable checkpoint
+terms before commercial use or redistribution.
+
 ## Bundled Karaoke fonts
 
 Karaoke Studio redistributes the following unmodified font binaries under the

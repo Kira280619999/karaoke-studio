@@ -7,9 +7,10 @@ import {
   videoExportArtifacts,
 } from './export-artifacts.ts';
 
-test('only rendered MP4 artifacts appear in the export action list', () => {
+test('rendered MOV masters and MP4 share copies appear in the export action list', () => {
   const artifacts = videoExportArtifacts([
     { id: 'exports/final.mp4', label: 'final.mp4', kind: 'export', url: '/final', bytes: 12 },
+    { id: 'exports/master.mov', label: 'master.mov', kind: 'export', url: '/master', bytes: 24 },
     { id: 'exports/legacy.mp4', label: 'song-r00002-1080p120.mp4', kind: 'export', url: '/legacy', bytes: 11 },
     { id: 'exports/hfr.mp4', label: 'song-r00002-hfr-realtime-v1-1080p120.mp4', kind: 'export', url: '/hfr', bytes: 13 },
     { id: 'exports/qa.json', label: 'qa.json', kind: 'export', url: '/qa', bytes: 8 },
@@ -18,6 +19,7 @@ test('only rendered MP4 artifacts appear in the export action list', () => {
 
   assert.deepEqual(artifacts.map((artifact) => artifact.label), [
     'final.mp4',
+    'master.mov',
     'song-r00002-hfr-realtime-v1-1080p120.mp4',
   ]);
 });

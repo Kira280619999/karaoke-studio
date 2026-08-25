@@ -34,6 +34,11 @@ class MediaInfo:
     variable_frame_rate: bool
     has_audio: bool
     audio_duration_us: int | None
+    audio_codec: str | None
+    audio_sample_format: str | None
+    audio_sample_rate: int | None
+    audio_channels: int | None
+    audio_bits_per_raw_sample: int | None
     rotation: int
     video_frames: int | None
     video_has_b_frames: int
@@ -122,6 +127,15 @@ def probe(path: Path, settings: Settings) -> MediaInfo:
         audio_duration_us=round(float(audio_duration_raw) * 1_000_000)
         if audio_duration_raw
         else None,
+        audio_codec=str(audio.get("codec_name")) if audio else None,
+        audio_sample_format=str(audio.get("sample_fmt")) if audio else None,
+        audio_sample_rate=(int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None),
+        audio_channels=(int(audio["channels"]) if audio and audio.get("channels") else None),
+        audio_bits_per_raw_sample=(
+            int(audio["bits_per_raw_sample"])
+            if audio and audio.get("bits_per_raw_sample") not in {None, "N/A", "0"}
+            else None
+        ),
         rotation=rotation,
         video_frames=(
             int(video["nb_frames"])

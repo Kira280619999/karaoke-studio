@@ -10,6 +10,7 @@ from .media import probe, run, sha256_file
 from .models import ProjectRecord, ProjectState, TimelineV1
 from .motion import line_progress_ppm
 from .quicktime import read_full_frame_rate_playback_intent
+from .separation import load_candidates
 from .settings import Settings
 from .styles import normalize_karaoke_color_id
 from .timeline import validate_timeline
@@ -125,6 +126,8 @@ def run_final_qa(
     settings: Settings,
     mode: str,
     expected_instrumental_id: str | None = None,
+    expected_instrumental_sha256: str | None = None,
+    expected_video_source: Path | None = None,
 ) -> dict:
     timing_verified = project.state in {ProjectState.VERIFIED, ProjectState.RENDERED}
     timeline_issues = validate_timeline(
@@ -150,6 +153,59 @@ def run_final_qa(
     playback_timing = high_frame_rate_packet_qa(
         output, output_info, timeline, settings
     )
+    expected_audio_codec = (
+        "pcm_s24le" if mode == "final" and output.suffix.casefold() == ".mov" else "aac"
+    )
+    audio_contract = {
+        "expected_codec": expected_audio_codec,
+        "codec": output_info.audio_codec,
+        "sample_format": output_info.audio_sample_format,
+        "sample_rate": output_info.audio_sample_rate,
+        "channels": output_info.audio_channels,
+        "bits_per_raw_sample": output_info.audio_bits_per_raw_sample,
+        "limiter": False,
+        "loudness_normalization": False,
+    }
+    audio_contract["status"] = (
+        "PASS"
+        if output_info.audio_codec == expected_audio_codec
+        and output_info.audio_sample_rate == 48000
+        and output_info.audio_channels == 2
+        and (
+            expected_audio_codec != "pcm_s24le"
+            or output_info.audio_bits_per_raw_sample == 24
+        )
+        else "FAIL"
+    )
+    pcm_identity: dict[str, object] = {"status": "NOT_REQUIRED"}
+    if mode == "final" and output.suffix.casefold() == ".mov" and expected_instrumental_id:
+        selected = next(
+            (
+                candidate
+                for candidate in load_candidates(project_dir)
+                if candidate.id == expected_instrumental_id
+            ),
+            None,
+        )
+        if selected and Path(selected.instrumental).is_file():
+            source_pcm_hash = _decoded_pcm_hash(Path(selected.instrumental), settings)
+            output_pcm_hash = _decoded_pcm_hash(output, settings)
+            pcm_identity = {
+                "status": "PASS" if source_pcm_hash == output_pcm_hash else "FAIL",
+                "source_pcm_sha256": source_pcm_hash,
+                "output_pcm_sha256": output_pcm_hash,
+            }
+        else:
+            pcm_identity = {"status": "FAIL", "reason": "MISSING_CONFIRMED_PCM"}
+    video_bitstream_identity: dict[str, object] = {"status": "NOT_REQUIRED"}
+    if expected_video_source is not None:
+        source_video_hash = _encoded_video_hash(expected_video_source, settings)
+        output_video_hash = _encoded_video_hash(output, settings)
+        video_bitstream_identity = {
+            "status": "PASS" if source_video_hash == output_video_hash else "FAIL",
+            "source_video_sha256": source_video_hash,
+            "output_video_sha256": output_video_hash,
+        }
     run([settings.ffmpeg, "-v", "error", "-i", str(output), "-f", "null", "-"])
     qa_dir = project_dir / "qa" / output.stem
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +245,9 @@ def run_final_qa(
         and av_duration_delta_us is not None
         and av_duration_delta_us <= frame_us
         and playback_timing["status"] in {"PASS", "NOT_REQUIRED"}
+        and audio_contract["status"] == "PASS"
+        and pcm_identity["status"] in {"PASS", "NOT_REQUIRED"}
+        and video_bitstream_identity["status"] in {"PASS", "NOT_REQUIRED"}
     )
     advisory_reasons: list[str] = []
     if mode == "final" and not timing_verified:
@@ -223,6 +282,9 @@ def run_final_qa(
             str(timeline.metadata.get("karaoke_color", ""))
         ),
         "audio_duration_us": output_info.audio_duration_us,
+        "audio_contract": audio_contract,
+        "pcm_identity": pcm_identity,
+        "video_bitstream_identity": video_bitstream_identity,
         "av_duration_delta_us": av_duration_delta_us,
         "timeline_issues": [issue.model_dump(mode="json") for issue in timeline_issues],
         "motion_qa": motion_report,
@@ -236,6 +298,7 @@ def run_final_qa(
         ),
         "instrumental_candidate": project.selected_instrumental,
         "render_bound_instrumental_candidate": expected_instrumental_id,
+        "render_bound_instrumental_sha256": expected_instrumental_sha256,
         "instrumental_confirmed": project.instrumental_confirmed,
         "timing_verified_at_render": timing_verified,
         "advisory_reasons": advisory_reasons,
@@ -260,6 +323,56 @@ def run_final_qa(
     if report["status"] == "FAIL":
         raise RuntimeError(f"Final QA thất bại; xem {report_path}.")
     return report
+
+
+def _decoded_pcm_hash(path: Path, settings: Settings) -> str:
+    result = run(
+        [
+            settings.ffmpeg,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "pcm_s24le",
+            "-f",
+            "hash",
+            "-hash",
+            "sha256",
+            "-",
+        ]
+    )
+    value = result.stdout.strip().partition("=")[2]
+    if len(value) != 64:
+        raise RuntimeError(f"Không đọc được PCM hash của {path.name}.")
+    return value
+
+
+def _encoded_video_hash(path: Path, settings: Settings) -> str:
+    result = run(
+        [
+            settings.ffmpeg,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "copy",
+            "-f",
+            "hash",
+            "-hash",
+            "sha256",
+            "-",
+        ]
+    )
+    value = result.stdout.strip().partition("=")[2]
+    if len(value) != 64:
+        raise RuntimeError(f"Không đọc được video bitstream hash của {path.name}.")
+    return value
 
 
 def motion_qa(timeline: TimelineV1) -> dict[str, int | str]:

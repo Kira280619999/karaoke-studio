@@ -8,7 +8,7 @@ function isLegacyQuickTimeHfrExport(label: string): boolean {
 export function videoExportArtifacts(artifacts: Artifact[]): Artifact[] {
   return artifacts.filter(
     (artifact) => artifact.kind === 'export'
-      && artifact.label.toLowerCase().endsWith('.mp4')
+      && ['.mp4', '.mov'].some((suffix) => artifact.label.toLowerCase().endsWith(suffix))
       && !isLegacyQuickTimeHfrExport(artifact.label),
   );
 }

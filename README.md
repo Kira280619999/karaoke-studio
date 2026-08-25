@@ -15,18 +15,18 @@ Karaoke Studio là web app local biến video MP4 và timeline lời LRC/SRT/VTT
 - Nền thay thế nhận một hoặc nhiều ảnh/video (tối đa 64 cảnh). App giữ đúng thứ tự tệp người dùng chọn, tự chia toàn bài, ưu tiên dissolve điện ảnh đến 1,8 giây ở khoảng nghỉ/ranh giới câu sau khi AI căn lời, và thêm chuyển động Ken Burns nhẹ luân phiên để cảnh tĩnh không bị đứng hình. Preview cập nhật chuyển cảnh theo từng frame; MP4 xuất ra dùng cùng lịch cảnh và cùng hướng chuyển động. Ảnh dọc/ngang đều tự phủ kín khung hình; video nền được lặp cục bộ và không thay thế audio đang dùng để kiểm tra timing.
 - Kiểm tra nguồn bằng `ffprobe`, SHA-256, audio/video stream, duration, rotation và VFR; editor dùng proxy CFR, nguồn gốc không bị sửa.
 - Pipeline tiếp tục được sau gián đoạn nhờ manifest, SQLite WAL, timeline revision và checksum.
-- Adapter tách giọng cho Mel-Band RoFormer qua Audio Separator, `htdemucs_ft`, cùng center-cancel fallback bắt buộc kiểm duyệt.
+- Adapter tách giọng cho Mel-Band RoFormer, BS-RoFormer ViperX 1297 qua Audio Separator, `htdemucs_ft`, cùng center-cancel fallback bắt buộc kiểm duyệt. Mel-Band vẫn là mặc định ổn định; BS-RoFormer là candidate A/B chất lượng cao trong chế độ Maximum Accuracy.
 - Maximum Accuracy căn toàn bài bằng hai model CTC trên tối đa hai vocal stem: model chuyên lời hát tiếng Việt làm nguồn chính, model speech CTC làm kiểm chứng độc lập. Sau ensemble, Automatic Sweep Critic nghe lại tối đa ba lượt, chỉ tự sửa control point có đồng thuận mạnh và chuyển vùng không hội tụ sang “Cần nghe”.
 - Chuyển động quét `vocal_hybrid` giữ nguyên mốc bắt đầu/kết thúc từng từ từ CTC tiếng Việt, nhưng làm dịu các thay đổi vận tốc đột ngột giữa control point để đường tô không khựng. Preview và renderer dùng chung nội suy integer `line_progress_ppm`, nên cùng timestamp cho cùng vị trí tô.
 - Editor video có hai lyric lane cố định và preview quét trực tiếp. Chữ Karaoke lớn tương đương khoảng 10% chiều cao video 1080p, hai lane nằm trong vùng an toàn để không bị cắt khi mở `Chi tiết câu`. Chuyển tiếp ngắn vẫn chuẩn bị sẵn hai câu cho người hát; nếu khoảng nhạc dạo từ 1,5 giây trở lên, câu kế tiếp chỉ xuất hiện trong 1,5 giây cuối trước mốc hát. Mỗi câu luôn nằm đúng một hàng: preview đo bề rộng thật rồi tự co riêng câu quá dài, còn renderer MP4 tự co ngang từng câu, nên lời không wrap hoặc tràn từ lane trên xuống lane dưới. Manual Precision không gọi AI: mọi thao tác chọn từ, kéo timing, Undo/Redo, khóa và duyệt câu được tập trung trong `Cuộn timeline toàn bài`; bấm chữ đầu tại đó sẽ nghe xuyên từ đuôi câu trước. Bộ chỉnh `Chuyển tiếp câu` cũng nằm ngay trong bàn chỉnh này, luôn hiện câu trước/câu đang chỉnh/câu sau, báo rõ `CHỒNG`/`NGHỈ`, có preset 0/100/250/500 ms và hai nút đóng dấu đầu phát cho điểm hết câu trên/đầu câu dưới. Hai nút nghe chuyển tiếp luôn phát trọn vẹn cả hai câu liên tiếp đúng một lượt, không cắt theo token đang chọn; `Tiếp tục nghe từ đây` hủy mọi loop/range nghe thử và phát tiếp ngay tại đầu phát hiện tại.
 - Dải `Cuộn timeline toàn bài` là bàn chỉnh chính nằm ngay phía trên video MP4, hiển thị mọi câu/từ trên hai lane theo integer microseconds. Lăn chuột hoặc trackpad để rà ngang, đổi ba mức zoom, bấm khoảng trống để seek, hoặc bấm từ để mở đúng câu và nghe loop; mỗi lượt nghe từ có 650 ms lấy đà và 500 ms đuôi để không cắt phụ âm đầu/cuối. Chế độ theo playhead có thể bật/tắt để không giành quyền cuộn tay. Có thể chọn `Kéo từ` hoặc `Kéo câu`, xem vị trí cũ và độ lệch khi kéo, giữ Shift để bắt theo frame, và đặt mốc tay ngay lúc video đang phát để khối timing tự bắt vào mốc gần nhất. Khi kéo, engine chỉ sao chép câu đang đổi và cập nhật trực tiếp các block DOM thuộc câu đó tối đa một lần mỗi animation frame; React không render lại hàng trăm block của toàn bài. Khi thả, timeline tự động PATCH xuống backend bằng optimistic revision, các thay đổi phát sinh trong lúc đang lưu được xếp hàng và xung đột revision được đọc lại rồi lưu tiếp; không cần nút lưu thủ công. Nhấn giữ một khối sẽ dừng mọi audio/video trên trang; thả ra vẫn im lặng và chỉ bấm từ hoặc nút nghe mới phát lại. Mốc tay chỉ lưu local theo từng project.
 - Ngay dưới timeline có `Chỉnh lời trực tiếp`: sửa ký tự trong từ, chèn từ trước/sau, xóa từ, thêm câu tại đầu phát hoặc xóa câu. Nội dung người dùng nhập là lời hiển thị duy nhất; hệ thống tự dựng timing/sweep thủ công hợp lệ, đánh dấu vùng mới là `Cần nghe`, hỗ trợ Undo và tự lưu revision xuống backend.
 - Timeline mặc định dùng vùng kéo cao, nút và chữ lớn hơn. Nút `Phóng lớn` mở bàn chỉnh gần toàn màn hình để thao tác từ/câu/mốc chính xác; `Esc` hoặc `Thu nhỏ` quay lại workspace mà không mất thay đổi chưa lưu.
-- Khung Preview lấy mẫu trên lưới 1920×1080/120fps để timecode, bước từng frame, chuyển động nền và quét chữ vẫn chính xác đến 1/120 giây; bản xuất 60fps tương thích lấy đúng các mốc khung tương ứng. Viewer mặc định phát đúng instrumental đang chọn cho bản Karaoke, đồng thời có nút `KARAOKE / GỐC` để đối chiếu mix có ca sĩ mà không đổi playhead; waveform đổi theo đúng nguồn đang nghe. Số khung thực sự nhìn thấy phụ thuộc tần số quét màn hình. Preview chỉ phát video và hai dòng Karaoke, không có vùng bấm theo từ, tay nắm timing hoặc toolbar nổi che hình. Mọi chỉnh sửa được tập trung duy nhất ở `Cuộn timeline toàn bài`; khối Timing Editor trùng chức năng đã được loại bỏ.
+- Khung Preview lấy mẫu trên lưới 1920×1080/120fps để timecode, bước từng frame, chuyển động nền và quét chữ vẫn chính xác đến 1/120 giây; bản xuất 60fps tương thích lấy đúng các mốc khung tương ứng. Viewer luôn bắt đầu bằng mix `GỐC` có ca sĩ để kiểm timing, đồng thời có nút `KARAOKE / GỐC` để A/B mà không đổi playhead; waveform đổi theo đúng nguồn đang nghe. Số khung thực sự nhìn thấy phụ thuộc tần số quét màn hình. Preview chỉ phát video và hai dòng Karaoke, không có vùng bấm theo từ, tay nắm timing hoặc toolbar nổi che hình. Mọi chỉnh sửa được tập trung duy nhất ở `Cuộn timeline toàn bài`; khối Timing Editor trùng chức năng đã được loại bỏ.
 - Bản có ca sĩ luôn dùng mix gốc và có watermark `TIMING NOT VERIFIED` khi timing chưa được xác nhận. Final loại giọng chỉ mở sau khi người vận hành nghe và xác nhận instrumental đang chọn; điểm timing chưa duyệt vẫn là cảnh báo và được ghi rõ trong tên file cùng `QA_REPORT.json`, không khóa Final.
 - Renderer RGBA bằng Pillow phát frame trực tiếp vào FFmpeg, không phụ thuộc filter ASS/libass. Chuyển động nền ảnh dùng phép biến đổi cubic dưới pixel theo đúng đường scale/translate của Preview, tránh hiện tượng đứng nhiều frame rồi nhảy vị trí ở 120fps.
-- Output mặc định CFR 1920×1080/60fps, H.264 `yuv420p`, AAC 48 kHz/320 kbps và `faststart` để tương thích rộng; vẫn có preset 1080p120, 1080p30 hoặc theo nguồn. Preset 120fps dùng clock 120 kHz, không có B-frame đảo timestamp, gắn movie-level QuickTime `full-frame-rate-playback-intent` đúng kiểu UInt8 để phát 1× thay vì slow-motion, và được QA từng packet lẫn metadata container; thiết bị vẫn cần hỗ trợ giải mã H.264 1080p120. Tên file gắn revision, contract `hfr-realtime-v1`, download dùng `no-store`, và bản 120fps đời cũ thiếu contract bị ẩn khỏi danh sách để không thể tải nhầm.
-- QA bắt buộc full-decode MP4, kiểm tra duration A/V trong một frame, timeline invariants, SHA-256 và ảnh đại diện trong `QA_REPORT.json`.
+- Output Final tạo hai delivery từ cùng một render video: master MOV H.264 + PCM 24-bit/48 kHz/stereo không nén và MP4 chia sẻ giữ nguyên video, chỉ mã hóa audio AAC 320 kbps. Draft vẫn là MP4 AAC. Preset mặc định CFR 1920×1080/60fps; vẫn có 1080p120, 1080p30 hoặc theo nguồn. Preset 120fps dùng clock 120 kHz, không có B-frame đảo timestamp, gắn movie-level QuickTime `full-frame-rate-playback-intent` đúng kiểu UInt8 để phát 1× thay vì slow-motion, và được QA từng packet lẫn metadata container; thiết bị vẫn cần hỗ trợ giải mã H.264 1080p120.
+- Audio Final là stage riêng sau timing: khóa checksum PCM nguồn, tạo ba candidate `Đầy nhạc / Cân bằng / Sạch giọng`, không được phép sửa `timeline.json` hoặc bằng chứng căn lời. Người dùng nghe A/B từ đúng playhead và tự chọn; server khóa cả candidate ID lẫn SHA-256 PCM trước render. QA full-decode cả MOV/MP4, kiểm tra duration A/V trong một frame, codec/sample format, timeline invariants, SHA-256 và xác minh audio PCM giải mã từ MOV giống bit-for-bit WAV đã xác nhận.
 
 ### Cài đặt
 
@@ -42,6 +42,21 @@ Chạy cả API và giao diện bằng một lệnh trên macOS/Linux:
 ```bash
 ./scripts/dev.sh
 ```
+
+### Thời gian để bắt đầu sử dụng
+
+Repository là source local, chưa phải bộ cài ký sẵn một chạm. Sau khi máy đã có các
+dependency ở trên, `uv sync --dev` và `pnpm install` chỉ cần chạy lại khi lockfile
+thay đổi. Checkpoint AI không nằm trong GitHub: app tải khi người dùng chấp nhận
+giấy phép và giữ trong cache local để các project sau dùng lại.
+
+Phân tích/timing mặc định không tự chạy ba profile Audio Final cực đại. Trên project
+thử nghiệm dài 4 phút 29 giây của máy phát triển, hai job phân tích có cache hiện có
+hoàn thành trong 1 phút 46 giây và 2 phút 57 giây. Đây không phải benchmark cold-start
+cho mọi cấu hình. Lượt đầu tạo đồng thời cả ba candidate `Đầy nhạc / Cân bằng /
+Sạch giọng` mất 52 phút 55 giây; chạy lại đúng source, checkpoint và thiết lập từ
+cache mất 1,23 giây. Vì vậy ba candidate cực đại là bước Studio theo yêu cầu, không
+phải chi phí bắt buộc để mở app hoặc tạo Preview.
 
 Trên Windows 10/11 x64, mở **PowerShell** tại thư mục dự án rồi chạy:
 
@@ -104,7 +119,7 @@ Bộ Maximum Accuracy dùng [`nguyenvulebinh/lyric-alignment`](https://huggingfa
 
 `alignment_profile` có ba mức: `maximum` (mặc định, 2 model × 2 stem), `balanced` (model lời hát × 2 stem) và `fast` (model lời hát × 1 stem). `motion_profile` mặc định là `vocal_hybrid`; hai chế độ nội bộ còn lại là `vocal_only` và `linear`. Automatic Sweep Critic dùng lại bằng chứng CTC và hai vocal stem, không tải thêm model. Nếu thiếu model hoặc stem, job vẫn hoàn thành nhưng `alignment-evidence.json` ghi degraded state và vùng liên quan không thể tự đạt Verified.
 
-Hai separator tùy chọn: [Audio Separator](https://github.com/surfer312/audio-separator) và [Demucs maintained fork](https://github.com/vvigot/demucs). Nếu không cài model, fixture và app vẫn chạy bằng fallback để người dùng chỉnh thủ công.
+Hai separator tùy chọn: [Audio Separator](https://github.com/nomadkaraoke/python-audio-separator) và [Demucs maintained fork](https://github.com/vvigot/demucs). Audio Separator chạy cả Mel-Band RoFormer và BS-RoFormer ViperX 1297. Checkpoint được tải vào kho dữ liệu local, không commit vào GitHub. Nếu không cài model, fixture và app vẫn chạy bằng fallback để người dùng chỉnh thủ công.
 
 ### Workflow Verified
 
@@ -112,8 +127,8 @@ Hai separator tùy chọn: [Audio Separator](https://github.com/surfer312/audio-
 2. App tự chạy tách giọng + căn lời đến hết bài ngay sau khi import; job có thể resume từ artifact hợp lệ.
 3. Nghe bản gốc có ca sĩ trong editor. Bấm token để loop; riêng chữ đầu tự phát từ đuôi câu trước. Kéo mốc bằng tai theo 10 ms/1 frame rồi duyệt, không có AI suggestion trong chế độ thủ công.
 4. Chỉ kiểm tra các dòng/token có reason code như model/stem bất đồng, câu quá nhanh, nốt ngân chưa chắc, LRC lệch xa hoặc vocal yếu; chỉnh mốc rồi duyệt dòng đó.
-5. Sau khi timing ổn, nghe A/B instrumental candidate và xác nhận lựa chọn cuối.
-6. Có thể xuất bản có ca sĩ bằng mix gốc bất cứ lúc nào. Bản loại giọng chỉ mở sau khi instrumental đã được nghe và xác nhận; timing còn cần duyệt vẫn không khóa xuất và được ghi vào QA. Khi hàng chờ đã hết và toàn bộ timing cũng đạt, project chuyển `VERIFIED`.
+5. Sau khi timing ổn, bấm `Chuẩn bị Audio Final cực đại`, nghe A/B ba profile từ cùng playhead rồi xác nhận lựa chọn cuối.
+6. Có thể xuất bản có ca sĩ bằng mix gốc bất cứ lúc nào. Bản loại giọng chỉ mở sau khi PCM instrumental đã được nghe, xác nhận và khóa SHA-256; một lần xuất tạo MOV PCM24 master cùng MP4 AAC 320k chia sẻ. Timing còn cần duyệt vẫn không khóa xuất và được ghi vào QA. Khi hàng chờ đã hết và toàn bộ timing cũng đạt, project chuyển `VERIFIED`.
 
 Trạng thái chuẩn: `IMPORTED → SEPARATED → ALIGNED → NEEDS_REVIEW → VERIFIED → RENDERED`.
 
@@ -129,9 +144,10 @@ Trạng thái chuẩn: `IMPORTED → SEPARATED → ALIGNED → NEEDS_REVIEW → 
 | `POST` | `/api/projects/{id}/timing-suggestions` | API chẩn đoán read-only; Manual Precision không gọi endpoint này |
 | `GET` | `/api/projects/{id}/alignment-evidence?line_id=...` | Đọc ứng viên model/stem, độ lệch và lý do cần kiểm tra |
 | `POST` | `/api/projects/{id}/instrumental` | Chọn và xác nhận instrumental A/B |
+| `POST` | `/api/projects/{id}/final-audio-candidates` | Tạo ba candidate Audio Final mà không chạy lại timing |
 | `POST` | `/api/projects/{id}/verify` | Áp dụng cổng Verified |
 | `POST` | `/api/projects/{id}/renders` | Render Draft hoặc Final |
-| `GET` | `/api/projects/{id}/artifacts` | Liệt kê stem, proxy, QA và MP4 |
+| `GET` | `/api/projects/{id}/artifacts` | Liệt kê stem, proxy, QA, MOV và MP4 |
 
 Chi tiết schema, kiến trúc và ranh giới an toàn: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/TIMELINE_V1.md](docs/TIMELINE_V1.md), [SECURITY.md](SECURITY.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -171,7 +187,7 @@ Windows PowerShell:
 .\scripts\dev.ps1
 ```
 
-Open `http://127.0.0.1:3000`. No user media is sent to a cloud service. Review and singer-reference exports keep the original singer and are visibly watermarked. The Viewer defaults to the selected final instrumental and offers an explicit Original/Karaoke toggle at the same playhead. An instrumental Karaoke export requires that exact stem to be explicitly confirmed; pending timing review points remain advisory and are recorded in the QA report instead of locking export. A Verified Final remains the optional quality label for timing and instrumental that have both been reviewed. Optional Vietnamese CTC weights are non-commercial and are never committed to this repository.
+Open `http://127.0.0.1:3000`. No user media is sent to a cloud service. Review and singer-reference exports keep the original singer and are visibly watermarked. The Viewer always starts with the original mix and offers an explicit Original/Karaoke toggle at the same playhead. An instrumental Karaoke export requires that exact PCM stem and its SHA-256 to be explicitly confirmed; pending timing review points remain advisory and are recorded in the QA report instead of locking export. Final creates a MOV master with uncompressed 24-bit PCM audio and an MP4 share copy with AAC 320 kbps audio. A Verified Final remains the optional quality label for timing and instrumental that have both been reviewed. Optional Vietnamese CTC weights are non-commercial and are never committed to this repository.
 
 ## Release policy
 

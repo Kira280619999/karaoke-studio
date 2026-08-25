@@ -398,8 +398,12 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/instrumental", response_model=ProjectRecord)
     def select_instrumental(project_id: str, selection: InstrumentalSelection) -> ProjectRecord:
         _require_project(store, project_id)
-        candidates = {candidate.id for candidate in load_candidates(store.project_dir(project_id))}
-        if selection.candidate_id not in candidates:
+        candidates = {
+            candidate.id: candidate
+            for candidate in load_candidates(store.project_dir(project_id))
+        }
+        candidate = candidates.get(selection.candidate_id)
+        if candidate is None or not candidate.export_eligible:
             raise HTTPException(404, "Không tìm thấy stem candidate.")
         timeline = store.load_timeline(project_id)
         evidence = _load_alignment_evidence(store.project_dir(project_id))
@@ -414,6 +418,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         return store.update_project(
             project_id,
             selected_instrumental=selection.candidate_id,
+            selected_instrumental_sha256=(candidate.pcm_sha256 if selection.confirmed else None),
             instrumental_confirmed=selection.confirmed,
             state=(
                 ProjectState.VERIFIED
@@ -421,6 +426,17 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 else ProjectState.NEEDS_REVIEW
             ),
         )
+
+    @app.post("/api/projects/{project_id}/final-audio-candidates")
+    def start_final_audio(project_id: str) -> dict:
+        _require_project(store, project_id)
+        if not (store.project_dir(project_id) / "work" / "mix.wav").is_file():
+            raise HTTPException(409, "Hãy chạy phân tích trước khi chuẩn bị Audio Final.")
+        try:
+            job = jobs.start(project_id, "final_audio", {})
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"job": job}
 
     @app.post("/api/projects/{project_id}/verify", response_model=ProjectRecord)
     def verify_project(project_id: str) -> ProjectRecord:
@@ -460,6 +476,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 409,
                 "Hãy nghe và xác nhận instrumental trong tab Audio trước khi xuất Final.",
             )
+        if request.mode == "final" and not project.selected_instrumental_sha256:
+            raise HTTPException(409, "Bản xác nhận cũ chưa có khóa PCM; hãy xác nhận Audio lại.")
         render_options = request.model_dump()
         if request.mode == "final":
             if (
@@ -470,9 +488,21 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     409,
                     "Instrumental đã đổi sau khi Viewer tải dữ liệu. Hãy nghe lại rồi xuất Final.",
                 )
+            if (
+                request.expected_instrumental_sha256 is not None
+                and request.expected_instrumental_sha256
+                != project.selected_instrumental_sha256
+            ):
+                raise HTTPException(
+                    409,
+                    "PCM instrumental đã đổi sau khi Viewer tải dữ liệu. Hãy nghe lại rồi xuất Final.",
+                )
             # Bind the worker to the exact confirmed stem that exists at queue time.
             # Older clients may omit the field, so the server remains authoritative.
             render_options["expected_instrumental_id"] = project.selected_instrumental
+            render_options["expected_instrumental_sha256"] = (
+                project.selected_instrumental_sha256
+            )
         try:
             job = jobs.start(project_id, "render", render_options)
         except RuntimeError as exc:
@@ -498,6 +528,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     continue
                 if path.is_file() and path.suffix.casefold() in {
                     ".mp4",
+                    ".mov",
                     ".wav",
                     ".json",
                     ".jpg",
@@ -598,7 +629,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             not filename
             or Path(filename).name != filename
             or path.parent != export_dir
-            or path.suffix.casefold() != ".mp4"
+            or path.suffix.casefold() not in {".mp4", ".mov"}
             or not path.is_file()
         ):
             raise HTTPException(404, "Video xuất không tồn tại.")
@@ -696,8 +727,9 @@ def _smart_timing_vocals(
         candidates = load_candidates(project_dir)
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise FileNotFoundError("Project chưa có vocal stem; hãy chạy phân tích trước.") from exc
-    production = [candidate for candidate in candidates if candidate.production_grade]
-    selected = (production or candidates)[: 2 if include_secondary else 1]
+    analysis = [candidate for candidate in candidates if candidate.analysis_eligible]
+    production = [candidate for candidate in analysis if candidate.production_grade]
+    selected = (production or analysis)[: 2 if include_secondary else 1]
     if not selected:
         raise FileNotFoundError("Project chưa có vocal stem để nghe và căn lời.")
 

@@ -193,14 +193,17 @@ def test_export_download_and_scoped_delete(
     export_path.write_bytes(payload)
     legacy_hfr = export_dir / "ân-điển-r00001-1080p120.mp4"
     compatible_hfr = export_dir / "ân-điển-r00001-hfr-realtime-v1-1080p120.mp4"
+    mov_master = export_dir / "ân-điển-master.mov"
     legacy_hfr.write_bytes(b"legacy-quicktime-hfr")
     compatible_hfr.write_bytes(b"compatible-quicktime-hfr")
+    mov_master.write_bytes(b"pcm24-master")
 
     artifacts = client.get(f"/api/projects/{project_id}/artifacts")
     assert artifacts.status_code == 200
     artifact_labels = {item["label"] for item in artifacts.json()}
     assert legacy_hfr.name not in artifact_labels
     assert compatible_hfr.name in artifact_labels
+    assert mov_master.name in artifact_labels
     artifact = next(item for item in artifacts.json() if item["label"] == filename)
     assert artifact["kind"] == "export"
     assert artifact["bytes"] == len(payload)
@@ -218,6 +221,12 @@ def test_export_download_and_scoped_delete(
     refused = client.delete(f"/api/projects/{project_id}/exports/{traversal}")
     assert refused.status_code in {404, 422}
     assert protected_path.read_bytes() == b"keep"
+
+    deleted_master = client.delete(
+        f"/api/projects/{project_id}/exports/{quote(mov_master.name, safe='')}"
+    )
+    assert deleted_master.status_code == 200
+    assert not mov_master.exists()
 
     deleted = client.delete(
         f"/api/projects/{project_id}/exports/{quote(filename, safe='')}"
@@ -342,6 +351,8 @@ def test_synthetic_process_render_and_qa(
     )
     assert confirmed_instrumental.status_code == 200
     assert confirmed_instrumental.json()["instrumental_confirmed"] is True
+    confirmed_pcm_sha256 = confirmed_instrumental.json()["selected_instrumental_sha256"]
+    assert len(confirmed_pcm_sha256) == 64
 
     early_api_render = client.post(
         f"/api/projects/{project_id}/renders",
@@ -358,6 +369,10 @@ def test_synthetic_process_render_and_qa(
         early_api_render.json()["job"]["options"]["expected_instrumental_id"]
         == "center_cancel"
     )
+    assert (
+        early_api_render.json()["job"]["options"]["expected_instrumental_sha256"]
+        == confirmed_pcm_sha256
+    )
     stale_instrumental_render = client.post(
         f"/api/projects/{project_id}/renders",
         json={
@@ -368,6 +383,17 @@ def test_synthetic_process_render_and_qa(
     )
     assert stale_instrumental_render.status_code == 409
     assert "Instrumental đã đổi" in stale_instrumental_render.text
+    stale_pcm_render = client.post(
+        f"/api/projects/{project_id}/renders",
+        json={
+            "mode": "final",
+            "preset": "source",
+            "expected_instrumental_id": "center_cancel",
+            "expected_instrumental_sha256": "0" * 64,
+        },
+    )
+    assert stale_pcm_render.status_code == 409
+    assert "PCM instrumental đã đổi" in stale_pcm_render.text
 
     current_revision = store.load_timeline(project_id).revision
     stale_api_render = client.post(
@@ -422,6 +448,7 @@ def test_synthetic_process_render_and_qa(
             "preset": "source",
             "countdown": True,
             "expected_instrumental_id": "center_cancel",
+            "expected_instrumental_sha256": confirmed_pcm_sha256,
         },
     )
     store.add_job(early_render_job)
@@ -460,7 +487,21 @@ def test_synthetic_process_render_and_qa(
     assert early_report["status"] == "PASS_WITH_WARNINGS"
     assert early_report["timing_verified_at_render"] is False
     assert early_report["render_bound_instrumental_candidate"] == "center_cancel"
+    assert early_report["render_bound_instrumental_sha256"] == confirmed_pcm_sha256
+    assert early_report["audio_contract"]["expected_codec"] == "pcm_s24le"
+    assert early_report["pcm_identity"]["status"] == "PASS"
     assert "TIMING_NOT_VERIFIED" in early_report["advisory_reasons"]
+    share_report_path = next(
+        (store.project_dir(project_id) / "qa").glob(
+            "*-karaoke-unverified-final-r*-source-share/QA_REPORT.json"
+        )
+    )
+    share_report = json.loads(share_report_path.read_text(encoding="utf-8"))
+    assert share_report["video_bitstream_identity"]["status"] == "PASS"
+    assert (
+        share_report["video_bitstream_identity"]["source_video_sha256"]
+        == share_report["video_bitstream_identity"]["output_video_sha256"]
+    )
 
     timeline = store.load_timeline(project_id)
     for line in timeline.lines:
@@ -497,7 +538,7 @@ def test_synthetic_process_render_and_qa(
     exports = list((store.project_dir(project_id) / "exports").glob("*.mp4"))
     reports = list((store.project_dir(project_id) / "qa").rglob("QA_REPORT.json"))
     assert len(exports) == 2
-    assert len(reports) == 2
+    assert len(reports) == 3
     report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
     draft_report = next(report for report in report_payloads if report["mode"] == "draft")
     assert draft_report["audio_mode"] == "source_mix_with_vocal"

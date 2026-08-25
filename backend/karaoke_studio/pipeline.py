@@ -13,6 +13,7 @@ from .alignment import (
 from .backgrounds import refresh_background_plan
 from .db import Store
 from .ensemble import align_timeline_ensemble, alignment_policy
+from .final_audio import prepare_final_audio_project
 from .media import extract_audio, make_proxy, probe, run, sha256_file, waveform_envelope
 from .models import (
     AlignmentEvidenceV1,
@@ -23,7 +24,7 @@ from .models import (
     TimingSource,
 )
 from .qa import motion_qa, run_final_qa
-from .rendering import render_video
+from .rendering import make_mp4_share_copy, render_video
 from .separation import load_candidates, separate_candidates, separator_request_signature
 from .settings import Settings
 from .timeline_source import parse_timeline_source
@@ -123,6 +124,21 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
 
     quality = options.get("quality", "highest")
     candidates_manifest = work / "stems" / "manifest.json"
+    previous_selected_sha256: str | None = None
+    if candidates_manifest.exists() and project.selected_instrumental:
+        try:
+            previous_selected = next(
+                (
+                    candidate
+                    for candidate in load_candidates(project_dir)
+                    if candidate.id == project.selected_instrumental
+                ),
+                None,
+            )
+            if previous_selected and Path(previous_selected.instrumental).is_file():
+                previous_selected_sha256 = sha256_file(Path(previous_selected.instrumental))
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            previous_selected_sha256 = None
     reusable_stems = False
     if candidates_manifest.exists():
         manifest_payload = json.loads(candidates_manifest.read_text(encoding="utf-8"))
@@ -137,19 +153,34 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         context.emit(0.42, "Đã khôi phục stem candidate đúng engine từ lần chạy trước.")
     else:
         candidates = separate_candidates(mix, project_dir, settings, quality, context.emit)
+    analysis_candidates = [candidate for candidate in candidates if candidate.analysis_eligible]
+    if not analysis_candidates:
+        raise RuntimeError("Không còn stem được phép dùng cho căn lời.")
     preferred = next(
-        (candidate for candidate in candidates if candidate.production_grade), candidates[0]
+        (candidate for candidate in analysis_candidates if candidate.production_grade),
+        analysis_candidates[0],
     )
-    keep_selection = (
-        reusable_stems
-        and project.selected_instrumental is not None
-        and any(candidate.id == project.selected_instrumental for candidate in candidates)
+    selected_candidate = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.id == project.selected_instrumental
+        ),
+        None,
+    )
+    keep_selection = bool(
+        selected_candidate
+        and previous_selected_sha256
+        and sha256_file(Path(selected_candidate.instrumental)) == previous_selected_sha256
     )
     selected_instrumental = project.selected_instrumental if keep_selection else preferred.id
     project = store.update_project(
         project_id,
         state=ProjectState.SEPARATED,
         selected_instrumental=selected_instrumental,
+        selected_instrumental_sha256=(
+            selected_candidate.pcm_sha256 if keep_selection and selected_candidate else None
+        ),
         instrumental_confirmed=project.instrumental_confirmed if keep_selection else False,
         error=None,
     )
@@ -171,7 +202,7 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
     if accepted_license and alignment_profile != "fast":
         alignment_candidates.extend(
             candidate
-            for candidate in candidates
+            for candidate in analysis_candidates
             if candidate.production_grade and candidate.id != preferred.id
         )
     alignment_candidates = alignment_candidates[:2]
@@ -307,6 +338,12 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
             "label": candidate.label,
             "production_grade": candidate.production_grade,
             "warning": candidate.warning,
+            "quality_profile": candidate.quality_profile,
+            "analysis_eligible": candidate.analysis_eligible,
+            "export_eligible": candidate.export_eligible,
+            "pcm_sha256": candidate.pcm_sha256,
+            "signal_path": candidate.signal_path,
+            "audio_qa": candidate.audio_qa,
             "instrumental": waveform_envelope(Path(candidate.instrumental)),
             "vocals": waveform_envelope(Path(candidate.vocals)),
         }
@@ -352,6 +389,15 @@ def _line_is_human_protected(line: LineTiming) -> bool:
     )
 
 
+def prepare_final_audio_job(
+    job_id: str, project_id: str, options: dict, settings: Settings
+) -> None:
+    del options
+    store = Store(settings)
+    context = JobContext(job_id, store)
+    prepare_final_audio_project(job_id, project_id, settings, context.emit)
+
+
 def render_project(job_id: str, project_id: str, options: dict, settings: Settings) -> None:
     store = Store(settings)
     context = JobContext(job_id, store)
@@ -370,6 +416,7 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
             "Instrumental chưa được nghe và xác nhận; không thể xuất Final loại giọng."
         )
     expected_instrumental_id = options.get("expected_instrumental_id")
+    expected_instrumental_sha256 = options.get("expected_instrumental_sha256")
     if mode == "final" and not expected_instrumental_id:
         raise RuntimeError(
             "Job Final thiếu khóa instrumental; hãy tạo lại lượt xuất từ Viewer hiện tại."
@@ -378,6 +425,20 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         raise RuntimeError(
             "Instrumental đã đổi sau khi xếp hàng render; hãy nghe lại và xuất Final mới."
         )
+    if mode == "final":
+        candidates = {candidate.id: candidate for candidate in load_candidates(store.project_dir(project_id))}
+        selected = candidates.get(str(expected_instrumental_id))
+        if not selected or not Path(selected.instrumental).is_file():
+            raise RuntimeError("Không tìm thấy PCM instrumental đã xác nhận.")
+        actual_instrumental_sha256 = sha256_file(Path(selected.instrumental))
+        if (
+            not expected_instrumental_sha256
+            or actual_instrumental_sha256 != expected_instrumental_sha256
+            or project.selected_instrumental_sha256 != expected_instrumental_sha256
+        ):
+            raise RuntimeError(
+                "PCM instrumental đã đổi sau khi xác nhận; hãy nghe A/B và xác nhận lại."
+            )
     output = render_video(
         project,
         timeline,
@@ -398,7 +459,28 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
         expected_instrumental_id=(
             str(expected_instrumental_id) if mode == "final" else None
         ),
+        expected_instrumental_sha256=(
+            str(expected_instrumental_sha256) if mode == "final" else None
+        ),
     )
+    outputs = [output]
+    if mode == "final" and "mp4_aac320" in options.get(
+        "deliveries", ["mov_pcm24", "mp4_aac320"]
+    ):
+        context.emit(0.94, "Đang tạo MP4 chia sẻ; video được copy, chỉ audio mã hóa AAC 320k…")
+        share = make_mp4_share_copy(output, settings)
+        run_final_qa(
+            share,
+            project,
+            timeline,
+            store.project_dir(project_id),
+            settings,
+            mode,
+            expected_instrumental_id=str(expected_instrumental_id),
+            expected_instrumental_sha256=str(expected_instrumental_sha256),
+            expected_video_source=output,
+        )
+        outputs.append(share)
     if project.state == ProjectState.RENDERED:
         next_state = ProjectState.RENDERED
     elif project.state == ProjectState.VERIFIED:
@@ -406,4 +488,7 @@ def render_project(job_id: str, project_id: str, options: dict, settings: Settin
     else:
         next_state = ProjectState.NEEDS_REVIEW
     store.update_project(project_id, state=next_state)
-    context.emit(1.0, f"Xuất video và QA {report['status']}: {output.name}")
+    context.emit(
+        1.0,
+        f"Xuất video và QA {report['status']}: " + " · ".join(path.name for path in outputs),
+    )

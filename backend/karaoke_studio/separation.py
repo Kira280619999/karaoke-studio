@@ -5,7 +5,7 @@ import shutil
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -24,6 +24,12 @@ class StemCandidate:
     vocals: str
     production_grade: bool
     warning: str | None = None
+    quality_profile: str = "analysis"
+    analysis_eligible: bool = True
+    export_eligible: bool = True
+    pcm_sha256: str | None = None
+    signal_path: str = "legacy_separator"
+    audio_qa: dict[str, object] | None = None
 
 
 class SeparatorAdapter(ABC):
@@ -89,6 +95,27 @@ class AudioSeparatorAdapter(SeparatorAdapter):
         vocals.replace(final_vocals)
         return StemCandidate(
             self.id, self.label, self.id, str(final_instrumental), str(final_vocals), True
+        )
+
+
+class BsRoformerAdapter(AudioSeparatorAdapter):
+    id = "bs_roformer_viperx_1297"
+    label = "BS-RoFormer ViperX 1297"
+    model = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+
+    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+        candidate = super().separate(mix, output_dir, settings)
+        return StemCandidate(
+            id=candidate.id,
+            label=candidate.label,
+            engine=candidate.engine,
+            instrumental=candidate.instrumental,
+            vocals=candidate.vocals,
+            production_grade=candidate.production_grade,
+            warning=(
+                "Candidate chất lượng cao (checkpoint SDR 12.9755). "
+                "Hãy nghe A/B vì benchmark không bảo đảm thắng mọi bản phối."
+            ),
         )
 
 
@@ -208,11 +235,32 @@ def separate_candidates(
     event: EventCallback,
 ) -> list[StemCandidate]:
     selected = selected_adapters(quality)
+    reusable: dict[str, StemCandidate] = {}
+    previous_manifest = project_dir / "work" / "stems" / "manifest.json"
+    if previous_manifest.is_file():
+        try:
+            reusable = {
+                candidate.id: candidate
+                for candidate in load_candidates(project_dir)
+                if Path(candidate.instrumental).is_file() and Path(candidate.vocals).is_file()
+            }
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            reusable = {}
 
     candidates: list[StemCandidate] = []
     failures: list[str] = []
     for index, adapter in enumerate(selected):
-        event(0.24 + 0.30 * index / max(1, len(selected)), f"Đang tách giọng bằng {adapter.label}…")
+        if adapter.id in reusable:
+            candidates.append(reusable[adapter.id])
+            event(
+                0.24 + 0.30 * index / max(1, len(selected)),
+                f"Đã giữ stem {adapter.label} từ lần phân tích trước.",
+            )
+            continue
+        event(
+            0.24 + 0.30 * index / max(1, len(selected)),
+            f"Đang tách giọng bằng {adapter.label}…",
+        )
         candidate_dir = project_dir / "work" / "stems" / adapter.id
         try:
             candidates.append(adapter.separate(mix, candidate_dir, settings))
@@ -223,7 +271,23 @@ def separate_candidates(
         candidates.append(
             fallback.separate(mix, project_dir / "work" / "stems" / fallback.id, settings)
         )
+    candidates = [
+        replace(
+            candidate,
+            pcm_sha256=(
+                candidate.pcm_sha256
+                or sha256_file(Path(candidate.instrumental))
+                if Path(candidate.instrumental).is_file()
+                else None
+            ),
+            quality_profile=(
+                "fallback" if candidate.id == CenterCancelAdapter.id else candidate.quality_profile
+            ),
+        )
+        for candidate in candidates
+    ]
     payload = {
+        "schema_version": "2.0",
         "request": separator_request_signature(quality),
         "candidates": [
             {
@@ -243,7 +307,13 @@ def separate_candidates(
 
 
 def selected_adapters(quality: str) -> list[SeparatorAdapter]:
-    adapters: list[SeparatorAdapter] = [AudioSeparatorAdapter(), DemucsAdapter()]
+    # Mel-Band stays first so existing behavior and the default selection remain stable.
+    # BS-RoFormer is the higher-quality A/B candidate for maximum-accuracy processing.
+    adapters: list[SeparatorAdapter] = [
+        AudioSeparatorAdapter(),
+        BsRoformerAdapter(),
+        DemucsAdapter(),
+    ]
     selected = [adapter for adapter in adapters if adapter.available()]
     if quality == "balanced":
         selected = selected[:1]
@@ -265,11 +335,16 @@ def load_candidates(project_dir: Path) -> list[StemCandidate]:
         (project_dir / "work" / "stems" / "manifest.json").read_text(encoding="utf-8")
     )
     candidates = []
+    supported_fields = {item.name for item in fields(StemCandidate)}
     for candidate in payload["candidates"]:
-        candidate = dict(candidate)
+        candidate = {
+            key: value for key, value in dict(candidate).items() if key in supported_fields
+        }
         for key in ("instrumental", "vocals"):
             path = Path(candidate[key])
             candidate[key] = str(path if path.is_absolute() else project_dir / path)
+        if not candidate.get("pcm_sha256") and Path(candidate["instrumental"]).is_file():
+            candidate["pcm_sha256"] = sha256_file(Path(candidate["instrumental"]))
         candidates.append(StemCandidate(**candidate))
     return candidates
 
@@ -320,6 +395,10 @@ def _model_manifests(
         / "models"
         / "audio-separator"
         / f"{AudioSeparatorAdapter.model}.manifest.json",
+        "bs_roformer_viperx_1297": settings.data_dir
+        / "models"
+        / "audio-separator"
+        / f"{BsRoformerAdapter.model}.manifest.json",
         "htdemucs_ft": settings.data_dir / "models" / "demucs" / "htdemucs_ft.manifest.json",
     }
     manifests: dict[str, object] = {}

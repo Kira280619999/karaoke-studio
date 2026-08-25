@@ -35,6 +35,7 @@ Worker ─┬─ ffprobe / FFmpeg
       alignment-cache/       cached CTC emissions by model/stem/checksum/window
       proxy.mp4
       mix.wav
+      final-audio/         immutable source conversion + profile manifests
       stems/manifest.json
       waveforms.json
     exports/
@@ -58,9 +59,10 @@ database, renderer or verification policy.
 
 ## Adapters
 
-- `Separator`: Audio Separator/Mel-Band RoFormer, HTDemucs FT and center-cancel fallback.
+- `Separator`: Audio Separator/Mel-Band RoFormer (stable default), BS-RoFormer ViperX 1297 (maximum-accuracy A/B candidate), HTDemucs FT and center-cancel fallback. Model checkpoints remain local and are recorded by hash in the project stem manifest.
 - `Aligner`: `EnsembleSongAligner` runs the pinned Vietnamese singing lyric CTC model plus an independent speech CTC model on up to two production vocal stems. Cached 20-second emissions with two-second overlap cover the full song; a global monotonic path rejects repeated-chorus outliers before robust token/grapheme consensus and onset/sustain refinement. `AutomaticSweepCritic` then re-listens for at most three bounded passes, corrects only diverse CTC control-point consensus, preserves human timing and fails closed when onset/sustain evidence does not converge. Energy-aware is the fail-closed fallback.
-- `Renderer`: Pillow RGBA frames piped to FFmpeg. Timeline 1.1 stores an optional integer `SweepCurveV1` on every token. React preview and MP4 export share the same piecewise interpolation over absolute microseconds and `line_progress_ppm`, eliminating renderer/editor motion drift. Custom visual libraries are represented by `BackgroundPlanV1`: ordered checksum-pinned image/video assets are scheduled across the whole song, scene boundaries prefer lyric gaps, and both React preview and FFmpeg `xfade` consume the same integer-microsecond manifest.
+- `FinalAudio`: a role-isolated stage consumes immutable `work/mix.wav`, builds Full/Balanced/Clean RoFormer ensemble candidates, converts to exact-length stereo PCM24 and marks every result `analysis_eligible=false`. It snapshots model/config/output hashes and refuses to complete if any timing or alignment artifact changes.
+- `Renderer`: Pillow RGBA frames piped to FFmpeg. Timeline 1.1 stores an optional integer `SweepCurveV1` on every token. React preview and export share the same piecewise interpolation over absolute microseconds and `line_progress_ppm`, eliminating renderer/editor motion drift. Final first writes H.264 + PCM24 MOV; the share MP4 copies that video stream and encodes only audio to AAC 320 kbps. QA proves the MOV decoded PCM is bit-identical to the SHA-256-bound candidate. Custom visual libraries are represented by `BackgroundPlanV1`: ordered checksum-pinned image/video assets are scheduled across the whole song, scene boundaries prefer lyric gaps, and both React preview and FFmpeg `xfade` consume the same integer-microsecond manifest.
 
 Timeline 1.0 remains readable and is upgraded on save. The adapter contracts stay independent from the canonical timeline, so another language, model or renderer can be added without changing project ownership or visible lyric text.
 
@@ -68,7 +70,7 @@ Timeline 1.0 remains readable and is upgraded on save. The adapter contracts sta
 
 Automatic output is evidence, not approval. `AlignmentEvidenceV1` stores every model/stem boundary, selected boundary, acoustic support, disagreement and reason code outside canonical `TimelineV1`. `verify_project` rejects the transition unless the instrumental was explicitly confirmed and both timeline validation and current-revision alignment evidence contain no blocking issue. Rendering itself is operator-controlled: review warnings never block export. An instrumental export made before verification is named `unverified-final`, receives `PASS_WITH_WARNINGS` plus reason codes in `QA_REPORT.json`, and leaves the project in `NEEDS_REVIEW`; only a verified instrumental render advances it to `RENDERED`.
 
-During review the proxy and singer-reference export use `work/mix.wav`, preserving the singer for accurate cue decisions. Separation is non-destructive and prepares candidates only. Once a selected instrumental exists, the operator may export it immediately; confirmation and timing review affect the quality label, not permission to render. Manual Precision intentionally does not call AI: selecting the first token loops the tail of the previous line through the new onset, and the operator controls start/end handles directly. The diagnostics suggestion endpoint remains read-only and detached from this manual workflow.
+During review the proxy and singer-reference export use `work/mix.wav`, preserving the singer for accurate cue decisions; the Viewer also starts in Original mode. Separation is non-destructive and prepares candidates only. A Final render requires the operator-confirmed candidate ID and exact PCM SHA-256, while timing review affects the quality label rather than permission to render. Manual Precision intentionally does not call AI: selecting the first token loops the tail of the previous line through the new onset, and the operator controls start/end handles directly. The diagnostics suggestion endpoint remains read-only and detached from this manual workflow.
 
 ## Security
 

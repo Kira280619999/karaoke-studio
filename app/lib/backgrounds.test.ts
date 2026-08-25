@@ -28,6 +28,7 @@ function project(overrides: Partial<Project> = {}): Project {
     fps: '60/1',
     has_audio: true,
     selected_instrumental: null,
+    selected_instrumental_sha256: null,
     instrumental_confirmed: false,
     error: null,
     ...overrides,

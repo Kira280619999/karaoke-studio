@@ -6,7 +6,7 @@ import signal
 
 from .db import Store
 from .models import JobState, ProjectState
-from .pipeline import JobCancelled, process_project, render_project
+from .pipeline import JobCancelled, prepare_final_audio_job, process_project, render_project
 from .settings import Settings
 
 _cancelled = False
@@ -45,6 +45,8 @@ def execute(job_id: str, settings: Settings) -> None:
         )
         if job.kind == "process":
             process_project(job.id, job.project_id, job.options, settings)
+        elif job.kind == "final_audio":
+            prepare_final_audio_job(job.id, job.project_id, job.options, settings)
         else:
             render_project(job.id, job.project_id, job.options, settings)
         current = store.get_job(job_id)

@@ -49,8 +49,12 @@ def test_streaming_separation_is_constant_length_and_preserves_mix(
         "torch",
         SimpleNamespace(hann_window=lambda _length: object()),
     )
-    monkeypatch.setattr(polarformer, "_create_session", lambda _ort, _path: object())
-    monkeypatch.setattr(polarformer, "_configure_torch", lambda _torch: None)
+    monkeypatch.setattr(
+        polarformer,
+        "_create_session",
+        lambda _ort, _path, **_kwargs: object(),
+    )
+    monkeypatch.setattr(polarformer, "_configure_torch", lambda _torch, _threads: None)
     monkeypatch.setattr(
         polarformer,
         "_infer_chunk",
@@ -78,6 +82,76 @@ def test_streaming_separation_is_constant_length_and_preserves_mix(
 
 def test_stream_chunk_environment_is_safely_clamped(monkeypatch) -> None:
     monkeypatch.setenv("KARAOKE_POLARFORMER_CHUNK_SECONDS", "20")
-    assert polarformer._stream_chunk_seconds() == 4
+    assert polarformer._stream_chunk_seconds() == 6
     monkeypatch.setenv("KARAOKE_POLARFORMER_CHUNK_SECONDS", "1")
     assert polarformer._stream_chunk_seconds() == 2
+
+
+def test_overlap_environment_keeps_quality_floor_and_memory_bound(monkeypatch) -> None:
+    chunk_size = polarformer.SAMPLE_RATE * 6
+    monkeypatch.setenv("KARAOKE_POLARFORMER_OVERLAP_MS", "100")
+    assert polarformer._stream_overlap_samples(chunk_size) == polarformer.SAMPLE_RATE // 4
+    monkeypatch.setenv("KARAOKE_POLARFORMER_OVERLAP_MS", "5000")
+    assert polarformer._stream_overlap_samples(chunk_size) == polarformer.SAMPLE_RATE
+
+
+def test_thread_count_adapts_to_machine_and_is_safely_clamped(monkeypatch) -> None:
+    monkeypatch.delenv("KARAOKE_POLARFORMER_THREADS", raising=False)
+    assert polarformer._polarformer_threads(18) == 10
+    assert polarformer._polarformer_threads(12) == 7
+    monkeypatch.setenv("KARAOKE_POLARFORMER_THREADS", "99")
+    assert polarformer._polarformer_threads(18) == 10
+    monkeypatch.setenv("KARAOKE_POLARFORMER_THREADS", "invalid")
+    assert polarformer._polarformer_threads(12) == 7
+
+
+def test_session_binds_static_shape_and_disables_retained_memory(tmp_path: Path) -> None:
+    entries: dict[str, object] = {}
+
+    class Options:
+        def add_free_dimension_override_by_name(self, name: str, value: int) -> None:
+            entries[f"shape:{name}"] = value
+
+        def add_session_config_entry(self, name: str, value: str) -> None:
+            entries[name] = value
+
+    class Runtime:
+        class ExecutionMode:
+            ORT_SEQUENTIAL = "sequential"
+
+        class GraphOptimizationLevel:
+            ORT_ENABLE_ALL = "all"
+
+        @staticmethod
+        def SessionOptions() -> Options:
+            return Options()
+
+        @staticmethod
+        def InferenceSession(path: str, *, sess_options: Options, providers: list[str]):
+            entries["path"] = path
+            entries["arena"] = sess_options.enable_cpu_mem_arena
+            entries["pattern"] = sess_options.enable_mem_pattern
+            entries["execution"] = sess_options.execution_mode
+            entries["optimization"] = sess_options.graph_optimization_level
+            entries["intra_threads"] = sess_options.intra_op_num_threads
+            entries["inter_threads"] = sess_options.inter_op_num_threads
+            entries["providers"] = providers
+            return object()
+
+    model = tmp_path / "model.onnx"
+    polarformer._create_session(Runtime(), model, time_frames=517, threads=7)
+
+    assert entries == {
+        "shape:batch": 1,
+        "shape:time_frames": 517,
+        "session.intra_op.allow_spinning": "0",
+        "session.inter_op.allow_spinning": "0",
+        "path": str(model),
+        "arena": False,
+        "pattern": False,
+        "execution": "sequential",
+        "optimization": "all",
+        "intra_threads": 7,
+        "inter_threads": 1,
+        "providers": ["CPUExecutionProvider"],
+    }

@@ -27,13 +27,16 @@ SAMPLE_RATE = 44_100
 N_FFT = 2_048
 HOP_LENGTH = 512
 WIN_LENGTH = 2_048
-# A 20-second ONNX window peaks above 10 GiB on Apple Silicon. Four seconds
-# keeps the same FP32 checkpoint below a practical 24-GB Mac memory budget,
-# while a one-second equal-power overlap hides chunk boundaries.
-STREAM_CHUNK_SECONDS = 4
-STREAM_OVERLAP_SECONDS = 1
-STREAM_MAX_CHUNK_SECONDS = 4
-ORT_THREADS = 4
+# Benchmarked on an 18-core M5 Pro and bounded for a 24-GB deployment target.
+# Six seconds is faster per useful audio second than four or eight seconds while
+# staying below 5 GiB RSS for the model process. A 500 ms equal-power overlap is
+# long enough to hide estimator boundaries without spending 25% of inference on
+# duplicate audio. CoreML EP is intentionally not selected: this graph partitions
+# into 125 CoreML subgraphs and peaked near 19 GiB RSS even with a compiled cache.
+STREAM_CHUNK_SECONDS = 6
+STREAM_OVERLAP_MILLISECONDS = 500
+STREAM_MAX_CHUNK_SECONDS = 6
+ORT_MAX_THREADS = 10
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -113,16 +116,19 @@ def separate_with_polarformer(
 
     chunk_seconds = _stream_chunk_seconds()
     chunk_size = chunk_seconds * SAMPLE_RATE
-    overlap_size = min(STREAM_OVERLAP_SECONDS * SAMPLE_RATE, chunk_size // 2)
+    overlap_size = _stream_overlap_samples(chunk_size)
     step = chunk_size - overlap_size
-    session = _create_session(ort, model_path)
-    _configure_torch(torch)
+    threads = _polarformer_threads()
+    time_frames = chunk_size // HOP_LENGTH + 1
+    session = _create_session(ort, model_path, time_frames=time_frames, threads=threads)
+    _configure_torch(torch, threads)
     stft_window = torch.hann_window(WIN_LENGTH)
     stft_options = {
         "n_fft": N_FFT,
         "hop_length": HOP_LENGTH,
         "win_length": WIN_LENGTH,
         "normalized": False,
+        "center": True,
     }
 
     instrumental_path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +162,13 @@ def separate_with_polarformer(
             normalized_mix.unlink(missing_ok=True)
 
 
-def _create_session(ort: object, model_path: Path) -> object:
+def _create_session(
+    ort: object,
+    model_path: Path,
+    *,
+    time_frames: int,
+    threads: int,
+) -> object:
     options = ort.SessionOptions()
     # ONNX Runtime's default arena retains multi-gigabyte intermediates after
     # every window. Disabling it trades a little speed for predictable RSS.
@@ -164,8 +176,13 @@ def _create_session(ort: object, model_path: Path) -> object:
     options.enable_mem_pattern = False
     options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    options.intra_op_num_threads = ORT_THREADS
+    options.intra_op_num_threads = threads
     options.inter_op_num_threads = 1
+    # Every inference window is padded to the same sample count. Binding the two
+    # symbolic axes lets ORT pre-plan the FP32 graph instead of resolving dynamic
+    # shapes again for every chunk.
+    options.add_free_dimension_override_by_name("batch", 1)
+    options.add_free_dimension_override_by_name("time_frames", time_frames)
     options.add_session_config_entry("session.intra_op.allow_spinning", "0")
     options.add_session_config_entry("session.inter_op.allow_spinning", "0")
     return ort.InferenceSession(
@@ -173,8 +190,8 @@ def _create_session(ort: object, model_path: Path) -> object:
     )
 
 
-def _configure_torch(torch: object) -> None:
-    torch.set_num_threads(ORT_THREADS)
+def _configure_torch(torch: object, threads: int) -> None:
+    torch.set_num_threads(threads)
     with suppress(RuntimeError):
         torch.set_num_interop_threads(1)
 
@@ -186,6 +203,32 @@ def _stream_chunk_seconds() -> int:
     except ValueError:
         requested = STREAM_CHUNK_SECONDS
     return max(2, min(STREAM_MAX_CHUNK_SECONDS, requested))
+
+
+def _stream_overlap_samples(chunk_size: int) -> int:
+    raw = os.environ.get(
+        "KARAOKE_POLARFORMER_OVERLAP_MS",
+        str(STREAM_OVERLAP_MILLISECONDS),
+    )
+    try:
+        requested = int(raw)
+    except ValueError:
+        requested = STREAM_OVERLAP_MILLISECONDS
+    milliseconds = max(250, min(1_000, requested))
+    return min(round(milliseconds * SAMPLE_RATE / 1_000), chunk_size // 2)
+
+
+def _polarformer_threads(cpu_count: int | None = None) -> int:
+    cores = max(1, cpu_count if cpu_count is not None else (os.cpu_count() or 4))
+    adaptive = min(ORT_MAX_THREADS, cores, max(2, round(cores * 0.56)))
+    raw = os.environ.get("KARAOKE_POLARFORMER_THREADS")
+    if raw is None:
+        return adaptive
+    try:
+        requested = int(raw)
+    except ValueError:
+        return adaptive
+    return max(1, min(ORT_MAX_THREADS, cores, requested))
 
 
 def _prepare_stream_source(mix: Path, normalized_mix: Path, ffmpeg: str) -> Path:

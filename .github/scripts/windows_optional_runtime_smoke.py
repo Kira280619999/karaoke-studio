@@ -192,7 +192,7 @@ def main(expected_system: str = "Windows") -> None:
         if separator_request_signature("highest")["adapters"] != [
             "mel_band_roformer",
             "htdemucs_ft",
-            "bs_roformer_viperx_1297",
+            "bs_polarformer_fp32",
         ]:
             raise RuntimeError("Highest-quality separation adapters were not discovered.")
         if not VietnameseCTCAligner(settings).available():

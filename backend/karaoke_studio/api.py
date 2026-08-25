@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from . import __version__
 from .alignment import (
     LYRIC_MODEL_ID,
     LYRIC_MODEL_LICENSE,
@@ -46,6 +47,7 @@ from .models import (
     TimingSuggestionResponse,
 )
 from .motion import remap_timeline_sweep_font, resolve_font
+from .polarformer import polarformer_dependencies_available, polarformer_model_path
 from .quicktime import is_legacy_quicktime_hfr_export
 from .rendering import render_preview_png
 from .separation import load_candidates
@@ -71,7 +73,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     settings.ensure()
     store = Store(settings)
     jobs = JobManager(store, settings)
-    app = FastAPI(title="Karaoke Studio API", version="0.1.0")
+    app = FastAPI(title="Karaoke Studio API", version=__version__)
     app.state.settings = settings
     app.state.store = store
     app.state.jobs = jobs
@@ -86,7 +88,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "local_only": True, "version": "0.1.0"}
+        return {"status": "ok", "local_only": True, "version": __version__}
 
     @app.get("/api/assets/karaoke-font")
     def karaoke_font() -> FileResponse:
@@ -102,6 +104,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     def capabilities() -> dict:
         return {
             **tool_capabilities(settings),
+            "polarformer_fp32": polarformer_dependencies_available(),
+            "polarformer_model_downloaded": polarformer_model_path(settings.data_dir).is_file(),
             "data_dir": str(settings.data_dir),
             "vietnamese_model": {
                 "id": "nguyenvulebinh/wav2vec2-base-vietnamese-250h",

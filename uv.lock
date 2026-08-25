@@ -681,7 +681,7 @@ wheels = [
 
 [[package]]
 name = "karaoke-studio"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -704,6 +704,8 @@ quality = [
     { name = "demucs", version = "4.0.1", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
     { name = "demucs", version = "4.1.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
     { name = "librosa" },
+    { name = "onnxruntime" },
+    { name = "torch" },
 ]
 
 [package.dev-dependencies]
@@ -723,10 +725,12 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'alignment'", specifier = ">=0.32,<2" },
     { name = "librosa", marker = "extra == 'quality'", specifier = ">=0.10.2,<0.11" },
     { name = "numpy", specifier = ">=2.1,<3" },
+    { name = "onnxruntime", marker = "extra == 'quality'", specifier = ">=1.20,<2" },
     { name = "pillow", specifier = ">=11.1,<13" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
     { name = "soundfile", specifier = ">=0.13,<1" },
     { name = "torch", marker = "extra == 'alignment'", specifier = ">=2.7,<3" },
+    { name = "torch", marker = "extra == 'quality'", specifier = ">=2.7,<3" },
     { name = "transformers", marker = "extra == 'alignment'", specifier = ">=4.52,<6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
 ]

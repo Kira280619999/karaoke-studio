@@ -185,6 +185,8 @@ export interface Capabilities {
   ffprobe: boolean;
   audio_separator: boolean;
   demucs: boolean;
+  polarformer_fp32: boolean;
+  polarformer_model_downloaded: boolean;
   vietnamese_ctc: boolean;
   data_dir: string;
   vietnamese_model: { id: string; license: string; bundled: boolean };

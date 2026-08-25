@@ -10,6 +10,14 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .media import MediaError, resolve_executable, run, sha256_file
+from .polarformer import (
+    POLARFORMER_FILENAME,
+    POLARFORMER_MODEL_ID,
+    POLARFORMER_REVISION,
+    ensure_polarformer_model,
+    polarformer_dependencies_available,
+    separate_with_polarformer,
+)
 from .settings import Settings
 
 EventCallback = Callable[[float, str], None]
@@ -96,6 +104,42 @@ class BsRoformerAdapter(AudioSeparatorAdapter):
     id = "bs_roformer_viperx_1297"
     label = "BS-RoFormer ViperX 1297"
     model = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+
+
+class BsPolarformerAdapter(SeparatorAdapter):
+    id = "bs_polarformer_fp32"
+    label = "BS PolarFormer 62 · FP32"
+
+    def available(self) -> bool:
+        return polarformer_dependencies_available()
+
+    def separate(self, mix: Path, output_dir: Path, settings: Settings) -> StemCandidate:
+        model_path = ensure_polarformer_model(settings.data_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        instrumental = output_dir / "instrumental.wav"
+        vocals = output_dir / "vocals.wav"
+        separate_with_polarformer(mix, model_path, instrumental, vocals)
+        _write_model_manifest(
+            model_path.with_suffix(".manifest.json"),
+            model_id=POLARFORMER_MODEL_ID,
+            engine="onnxruntime",
+            model_files=[model_path],
+            metadata={
+                "revision": POLARFORMER_REVISION,
+                "precision": "fp32",
+                "architecture": "BS PolarFormer 62 bands",
+                "filename": POLARFORMER_FILENAME,
+                "license": "MIT",
+            },
+        )
+        return StemCandidate(
+            self.id,
+            self.label,
+            self.id,
+            str(instrumental),
+            str(vocals),
+            True,
+        )
 
 
 class DemucsAdapter(SeparatorAdapter):
@@ -232,6 +276,20 @@ def separate_candidates(
             candidates.append(adapter.separate(mix, candidate_dir, settings))
         except Exception as exc:  # adapters are intentionally isolated
             failures.append(f"{adapter.label}: {exc}")
+    polarformer_ready = any(candidate.id == BsPolarformerAdapter.id for candidate in candidates)
+    if not polarformer_ready:
+        # Keep the proven ViperX path as a runtime fallback, but do not spend
+        # time or RAM running both export-only models when PolarFormer succeeds.
+        fallback = BsRoformerAdapter()
+        if fallback.available():
+            candidate_dir = project_dir / "work" / "stems" / fallback.id
+            restored = _restore_existing_candidate(fallback, candidate_dir)
+            try:
+                candidates.append(
+                    restored or fallback.separate(mix, candidate_dir, settings)
+                )
+            except Exception as exc:
+                failures.append(f"{fallback.label}: {exc}")
     if not candidates:
         fallback = CenterCancelAdapter()
         candidates.append(
@@ -257,8 +315,8 @@ def separate_candidates(
 
 
 def selected_adapters(quality: str) -> list[SeparatorAdapter]:
-    # Preserve the original analysis profile, then prepare ViperX separately as
-    # the single default Final stem. Pipeline alignment deliberately ignores it.
+    # Preserve the original analysis profile, then prepare PolarFormer
+    # separately as the default Final stem. Pipeline alignment ignores it.
     adapters: list[SeparatorAdapter] = [AudioSeparatorAdapter(), DemucsAdapter()]
     selected = [adapter for adapter in adapters if adapter.available()]
     if quality == "balanced":
@@ -269,9 +327,9 @@ def selected_adapters(quality: str) -> list[SeparatorAdapter]:
         selected.append(CenterCancelAdapter())
     if not selected:
         selected = [CenterCancelAdapter()]
-    viperx = BsRoformerAdapter()
-    if viperx.available():
-        selected.append(viperx)
+    polarformer = BsPolarformerAdapter()
+    if polarformer.available():
+        selected.append(polarformer)
     return selected
 
 
@@ -329,6 +387,7 @@ def _write_model_manifest(
     model_id: str,
     engine: str,
     model_files: list[Path],
+    metadata: dict[str, object] | None = None,
 ) -> None:
     files = {
         path.name: {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
@@ -337,7 +396,11 @@ def _write_model_manifest(
     }
     if not files:
         raise MediaError(f"Không tìm thấy checkpoint đã tải cho {model_id}.")
-    package = "audio-separator" if engine == "audio-separator" else "demucs"
+    package = {
+        "audio-separator": "audio-separator",
+        "demucs": "demucs",
+        "onnxruntime": "onnxruntime",
+    }.get(engine, engine)
     output.write_text(
         json.dumps(
             {
@@ -346,6 +409,7 @@ def _write_model_manifest(
                 "engine_version": _package_version(package),
                 "model_id": model_id,
                 "files": files,
+                "metadata": metadata or {},
             },
             ensure_ascii=False,
             indent=2,
@@ -366,6 +430,10 @@ def _model_manifests(
         / "models"
         / "audio-separator"
         / f"{BsRoformerAdapter.model}.manifest.json",
+        "bs_polarformer_fp32": settings.data_dir
+        / "models"
+        / "bs-polarformer"
+        / "bs_polarformer.manifest.json",
         "htdemucs_ft": settings.data_dir / "models" / "demucs" / "htdemucs_ft.manifest.json",
     }
     manifests: dict[str, object] = {}

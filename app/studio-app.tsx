@@ -926,6 +926,7 @@ function ProjectWorkspace({
         <section className="analysis-launch">
           <div className="launch-copy"><span className="section-kicker">02 / PHÂN TÍCH</span><h2>Tách giọng và căn lời tiếng Việt</h2><p>Chế độ chất lượng cao nhất sẽ thử mọi engine có trên máy. Nếu chưa có model AI, hệ thống vẫn tạo fallback nhưng bắt buộc nghe xác nhận.</p></div>
           <div className="engine-grid">
+            <EngineStatus label="BS PolarFormer FP32" ready={Boolean(capabilities?.polarformer_fp32)} detail={capabilities?.polarformer_model_downloaded ? '201 MiB · đã xác minh local' : 'Tự tải 201 MiB lần đầu'} />
             <EngineStatus label="Mel-Band RoFormer" ready={Boolean(capabilities?.audio_separator)} detail="CoreML / Audio Separator" />
             <EngineStatus label="HTDemucs FT" ready={Boolean(capabilities?.demucs)} detail="Ứng viên A/B dự phòng" />
             <EngineStatus label="Vietnamese Lyric CTC" ready={Boolean(capabilities?.vietnamese_ctc)} detail="Model chuyên lời hát" />
@@ -1771,9 +1772,12 @@ function ReviewWorkspace({ data, onReload, onError, watchJob, job }: { data: Wor
 }
 
 function CandidateReview({ project, waveform, artifacts, onReload, onError, onSelected }: { project: Project; waveform: WaveformPayload | null; artifacts: Artifact[]; onReload: () => Promise<void>; onError: (message: string | null) => void; onSelected: (candidateId: string) => void }) {
-  const viperxCandidate = Object.entries(waveform?.candidates ?? {}).filter(
-    ([candidateId]) => candidateId === 'bs_roformer_viperx_1297',
-  );
+  const finalCandidates = Object.entries(waveform?.candidates ?? {})
+    .filter(([candidateId]) => ['bs_polarformer_fp32', 'bs_roformer_viperx_1297'].includes(candidateId))
+    .sort(([left]) => left === 'bs_polarformer_fp32' ? -1 : 1)
+    .slice(0, 1);
+  const usingPolarformer = finalCandidates[0]?.[0] === 'bs_polarformer_fp32';
+  const finalModelName = usingPolarformer ? 'BS PolarFormer 62 · FP32' : 'BS-RoFormer ViperX 1297';
   const select = async (candidateId: string) => {
     try {
       await api<Project>(`/api/projects/${project.id}/instrumental`, { method: 'POST', body: JSON.stringify({ candidate_id: candidateId, confirmed: true }) });
@@ -1786,9 +1790,9 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError, onSe
 
   return (
     <section className="candidate-panel">
-      <div><span className="section-kicker">ÂM THANH FINAL</span><h2>BS-RoFormer ViperX 1297</h2><p>ViperX 1297 là bản Karaoke mặc định duy nhất để Preview và xuất Final. Không cần tạo hay chọn thêm candidate khác.</p></div>
+      <div><span className="section-kicker">ÂM THANH FINAL</span><h2>{finalModelName}</h2><p>{usingPolarformer ? 'PolarFormer 62-band FP32 là bản Karaoke chất lượng cao mặc định để Preview và xuất Final.' : 'ViperX 1297 đang được dùng làm fallback an toàn vì PolarFormer FP32 chưa tạo stem thành công.'}</p></div>
       <div className="candidate-list">
-        {viperxCandidate.map(([candidateId, candidate]) => {
+        {finalCandidates.map(([candidateId, candidate]) => {
           const artifact = selectedInstrumentalArtifact(candidateId, artifacts);
           const selected = project.selected_instrumental === candidateId;
           return (
@@ -1800,11 +1804,11 @@ function CandidateReview({ project, waveform, artifacts, onReload, onError, onSe
                 });
               }} />}
               {candidate.warning && <p>{candidate.warning}</p>}
-              <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Mặc định để xuất ✓' : 'Đặt ViperX làm mặc định'}</button>
+              <button className={selected && project.instrumental_confirmed ? 'confirmed' : ''} type="button" onClick={() => select(candidateId)}>{selected && project.instrumental_confirmed ? 'Mặc định để xuất ✓' : `Đặt ${candidate.label} làm mặc định`}</button>
             </article>
           );
         })}
-        {viperxCandidate.length === 0 && <p>ViperX 1297 chưa sẵn sàng. Hãy bấm Phân tích lại để tạo stem mặc định.</p>}
+        {finalCandidates.length === 0 && <p>PolarFormer FP32 chưa sẵn sàng. Hãy bấm Phân tích lại để tải model và tạo stem mặc định.</p>}
       </div>
     </section>
   );

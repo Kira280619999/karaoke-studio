@@ -127,7 +127,10 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
     reusable_stems = False
     if candidates_manifest.exists():
         manifest_payload = json.loads(candidates_manifest.read_text(encoding="utf-8"))
-        reusable_stems = manifest_payload.get("request") == separator_request_signature(quality)
+        reusable_stems = (
+            manifest_payload.get("request") == separator_request_signature(quality)
+            and not manifest_payload.get("failures")
+        )
     if reusable_stems:
         candidates = load_candidates(project_dir)
         reusable_stems = all(
@@ -138,30 +141,36 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
         context.emit(0.42, "Đã khôi phục stem candidate đúng engine từ lần chạy trước.")
     else:
         candidates = separate_candidates(mix, project_dir, settings, quality, context.emit)
-    # ViperX is export-only: keep the exact pre-existing candidate order and
-    # engines for lyric alignment/timing.
+    # Export-only separators must never change the already-proven lyric
+    # alignment/timing inputs.
+    export_only_ids = {"bs_polarformer_fp32", "bs_roformer_viperx_1297"}
     analysis_candidates = [
-        candidate for candidate in candidates if candidate.id != "bs_roformer_viperx_1297"
+        candidate for candidate in candidates if candidate.id not in export_only_ids
     ]
     preferred = next(
         (candidate for candidate in analysis_candidates if candidate.production_grade),
         analysis_candidates[0] if analysis_candidates else candidates[0],
     )
-    export_default = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.id == "bs_roformer_viperx_1297"
-            and candidate.production_grade
-            and Path(candidate.instrumental).is_file()
-        ),
-        preferred,
-    )
+    export_default = preferred
+    for export_id in ("bs_polarformer_fp32", "bs_roformer_viperx_1297"):
+        prepared = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.id == export_id
+                and candidate.production_grade
+                and Path(candidate.instrumental).is_file()
+            ),
+            None,
+        )
+        if prepared is not None:
+            export_default = prepared
+            break
     project = store.update_project(
         project_id,
         state=ProjectState.SEPARATED,
         selected_instrumental=export_default.id,
-        instrumental_confirmed=export_default.id == "bs_roformer_viperx_1297",
+        instrumental_confirmed=export_default.id in export_only_ids,
         error=None,
     )
 
@@ -185,7 +194,7 @@ def process_project(job_id: str, project_id: str, options: dict, settings: Setti
             for candidate in candidates
             if candidate.production_grade
             and candidate.id != preferred.id
-            and candidate.id != "bs_roformer_viperx_1297"
+            and candidate.id not in export_only_ids
         )
     alignment_candidates = alignment_candidates[:2]
     vocal_inputs: dict[str, Path] = {}

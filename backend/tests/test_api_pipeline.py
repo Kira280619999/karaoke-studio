@@ -12,7 +12,7 @@ from karaoke_studio.api import create_app
 from karaoke_studio.db import Store, now_iso
 from karaoke_studio.models import JobRecord, JobState, ProjectState
 from karaoke_studio.pipeline import process_project, render_project
-from karaoke_studio.separation import AudioSeparatorAdapter
+from karaoke_studio.separation import AudioSeparatorAdapter, BsPolarformerAdapter
 
 LRC = """[ar:Fixture]
 [ti:Ánh sáng]
@@ -344,8 +344,9 @@ def test_synthetic_process_render_and_qa(
     test_settings, synthetic_video: Path, monkeypatch
 ) -> None:
     # Keep the synthetic end-to-end test independent of optional local AI models.
-    # Production still uses ViperX when audio-separator is installed.
+    # Production still uses PolarFormer when its optional runtime is installed.
     monkeypatch.setattr(AudioSeparatorAdapter, "available", lambda _self: False)
+    monkeypatch.setattr(BsPolarformerAdapter, "available", lambda _self: False)
     app = create_app(test_settings)
     client = TestClient(app)
     project_payload = _import_project(client, synthetic_video)

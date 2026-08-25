@@ -1,6 +1,6 @@
 [project]
 name = "karaoke-studio"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local, frame-verified MP4 + multi-format lyric timeline karaoke studio"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -20,6 +20,8 @@ quality = [
   "audioread>=3.0.1,<4",
   "demucs>=4.0.1,<5",
   "librosa>=0.10.2,<0.11",
+  "onnxruntime>=1.20,<2",
+  "torch>=2.7,<3",
 ]
 alignment = [
   "huggingface-hub>=0.32,<2",

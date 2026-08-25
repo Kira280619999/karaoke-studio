@@ -1,10 +1,20 @@
 # Third-party notices
 
-## Audio Separator and locally downloaded stem models
+## BS PolarFormer FP32 ONNX
+
+Karaoke Studio downloads the FP32 `bs_polarformer.onnx` conversion from
+[`bgkb/bs_polarformer`](https://huggingface.co/bgkb/bs_polarformer) at the
+pinned revision recorded in source. The repository declares the conversion
+and model card under the MIT License and credits the original
+[`ZFTurbo/Music-Source-Separation-Training`](https://github.com/ZFTurbo/Music-Source-Separation-Training)
+implementation. The weight is SHA-256 verified, stored only in the user's local
+data directory and is not redistributed in this repository or GitHub Release.
+
+## Audio Separator and fallback stem models
 
 Karaoke Studio invokes [Audio Separator](https://github.com/nomadkaraoke/python-audio-separator),
-which is licensed under the MIT License, to run Mel-Band RoFormer and
-BS-RoFormer ViperX 1297 locally.
+which is licensed under the MIT License, to run Mel-Band RoFormer for analysis
+and BS-RoFormer ViperX 1297 as a fallback when PolarFormer cannot run locally.
 
 The ViperX checkpoint `model_bs_roformer_ep_317_sdr_12.9755.ckpt` and its
 configuration are downloaded by Audio Separator on first use. Karaoke Studio

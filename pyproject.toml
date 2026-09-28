@@ -24,7 +24,7 @@ quality = [
   "torch>=2.7,<3",
 ]
 alignment = [
-  "huggingface-hub>=0.32,<2",
+  "huggingface-hub>=0.32,<3",
   "torch>=2.7,<3",
   "transformers>=4.52,<6",
 ]
